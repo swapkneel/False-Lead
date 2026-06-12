@@ -17,10 +17,17 @@ require('./config/db');
 
 const http    = require('http');
 const express = require('express');
+const cors = require('cors');
 const { initSocket } = require('./socket/index');
 
 const app        = express();
-const httpServer = http.createServer(app);  // shared server — Express + Socket.IO
+const httpServer = http.createServer(app); 
+
+app.use(cors({
+  origin: 'http://localhost:5173',
+  credentials: true
+}));
+// shared server — Express + Socket.IO
 
 // ─────────────────────────────────────────────
 //  Middleware
