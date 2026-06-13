@@ -401,3 +401,378 @@ h1, h2, h3 { line-height: 1.2; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; }
 }
+
+/* =============================================================
+ *  ROUND SCREEN — styles appended, existing rules untouched
+ * =============================================================
+ *
+ *  Role colour system:
+ *    Agent (normal)        --accent  #00e5c3  cyan
+ *    Impostor              #ff4d6a   red
+ *    Odd One (similar)     #ffaa00   amber
+ *    Informant (rev spy)   #a064ff   violet
+ * ============================================================= */
+
+/* ── Game page layout ─────────────────────────────────────────────────────── */
+.game-page {
+  width: 100%;
+  max-width: 480px;
+  padding: 1.25rem 1.25rem 6rem;   /* bottom padding for the pinned ready panel */
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.game-page--loading {
+  min-height: 60vh;
+  align-items: center;
+  justify-content: center;
+}
+
+/* ── Loading / case file open ─────────────────────────────────────────────── */
+.loading-case {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+}
+
+.loading-icon {
+  font-size: 3rem;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.loading-text {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+  letter-spacing: 0.04em;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.4; }
+}
+
+/* ── Round header ─────────────────────────────────────────────────────────── */
+.round-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.875rem 1.125rem;
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--bg-raised);
+}
+
+.round-counter {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  display: flex;
+  align-items: baseline;
+  gap: 0.2em;
+}
+
+.round-counter-current {
+  font-size: 1.75rem;
+  font-weight: 800;
+  color: var(--accent);
+  line-height: 1;
+}
+
+.round-counter-sep {
+  font-size: 1rem;
+  color: var(--text-faint);
+}
+
+.round-counter-total {
+  font-size: 1rem;
+  color: var(--text-muted);
+}
+
+.round-meta {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.35rem;
+}
+
+.round-type-badge {
+  font-size: 0.6875rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 0.2em 0.6em;
+  border-radius: 4px;
+  background: rgba(0, 229, 195, 0.1);
+  color: var(--accent);
+  border: 1px solid rgba(0, 229, 195, 0.2);
+}
+
+.round-category {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.round-category-icon { font-size: 0.75rem; }
+
+/* ── Role card ────────────────────────────────────────────────────────────── */
+.role-card-wrapper {
+  opacity: 0;
+  transform: translateY(8px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+
+.role-card-wrapper--visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.role-card {
+  border-radius: var(--radius-lg);
+  border: 1px solid;
+  padding: 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.role-card-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+
+.role-icon {
+  font-size: 2.25rem;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.role-eyebrow {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.2rem;
+}
+
+.role-label {
+  font-size: 1.5rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  color: var(--text-primary);
+}
+
+.role-divider {
+  border: none;
+  border-top: 1px solid;
+  opacity: 0.3;
+}
+
+.role-info-block { text-align: center; }
+
+.role-info-label {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.5rem;
+}
+
+.role-info-value {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 2rem;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  line-height: 1.1;
+  word-break: break-word;
+}
+
+.role-hint {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  text-align: center;
+  font-style: italic;
+  line-height: 1.5;
+}
+
+/* Skeleton while role:info hasn't arrived yet */
+.role-card-skeleton {
+  border-radius: var(--radius-lg);
+  border: 1px dashed var(--text-faint);
+  padding: 2.5rem 1.5rem;
+  text-align: center;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+/* ── Clue order panel ─────────────────────────────────────────────────────── */
+.clue-order-panel {
+  background: var(--bg-surface);
+  border-radius: var(--radius-md);
+  padding: 1.125rem;
+  border: 1px solid var(--bg-raised);
+}
+
+.panel-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  margin-bottom: 0.75rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.panel-title-icon { font-size: 0.9rem; }
+
+.clue-order-list {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.clue-order-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-raised);
+}
+
+.clue-order-item--me {
+  background: rgba(0, 229, 195, 0.07);
+  border: 1px solid rgba(0, 229, 195, 0.2);
+}
+
+.clue-order-num {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--text-faint);
+  width: 1.25rem;
+  text-align: center;
+  flex-shrink: 0;
+}
+
+.clue-order-item--me .clue-order-num { color: var(--accent); }
+
+.clue-order-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.clue-order-you-tag {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 0.15em 0.5em;
+  border-radius: 3px;
+  background: rgba(0, 229, 195, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(0, 229, 195, 0.25);
+}
+
+/* ── Discussion notice ───────────────────────────────────────────────────── */
+.discussion-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.625rem;
+  padding: 0.875rem 1rem;
+  background: rgba(245, 200, 66, 0.06);
+  border: 1px solid rgba(245, 200, 66, 0.18);
+  border-radius: var(--radius-md);
+}
+
+.discussion-icon { font-size: 1rem; flex-shrink: 0; padding-top: 0.1rem; }
+
+.discussion-notice p {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+/* ── Ready panel — pinned to bottom of screen ────────────────────────────── */
+.ready-panel-wrapper {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 10;
+  padding: 1rem 1.25rem 1.5rem;
+  background: linear-gradient(to top, var(--bg-base) 70%, transparent);
+}
+
+/* Keep it centred on wide screens */
+@media (min-width: 520px) {
+  .ready-panel-wrapper {
+    left: 50%;
+    transform: translateX(-50%);
+    width: 480px;
+  }
+}
+
+.ready-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.ready-count-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+}
+
+.ready-pips {
+  display: flex;
+  gap: 0.3rem;
+}
+
+.ready-pip {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+  transition: background 0.2s ease, box-shadow 0.2s ease;
+}
+
+.ready-pip--lit {
+  background: var(--accent);
+  box-shadow: 0 0 6px rgba(0, 229, 195, 0.6);
+}
+
+.ready-count-label {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.ready-btn { font-size: 1rem; padding: 0.875rem; letter-spacing: 0.01em; }
+
+.ready-btn--done {
+  background: rgba(0, 229, 195, 0.12);
+  color: var(--accent);
+  border: 1px solid rgba(0, 229, 195, 0.3);
+  cursor: default;
+}
+
+/* ── Responsive ──────────────────────────────────────────────────────────── */
+@media (max-width: 380px) {
+  .game-page          { padding: 1rem 1rem 5.5rem; }
+  .role-info-value    { font-size: 1.625rem; }
+  .round-counter-current { font-size: 1.5rem; }
+}

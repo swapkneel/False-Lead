@@ -1,23 +1,15 @@
 // client/src/routes/AppRoutes.jsx
-// ─────────────────────────────────────────────────────────────────────────────
-//  Central route definitions.
-//
-//  All routes live here so there's one place to look when adding a new page.
-//  The /game route is stubbed as a placeholder for the round screen,
-//  which will be built in the next phase.
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { Routes, Route, Navigate } from 'react-router-dom';
 import Home  from '../pages/Home';
 import Lobby from '../pages/Lobby';
+import Game  from '../pages/Game';
 
-// Thin placeholder so /lobby → /game navigation doesn't 404
-// Replace with the real Game page in the next phase
-function GamePlaceholder() {
+// Placeholder — replace when voting screen is built
+function VotingPlaceholder() {
   return (
-    <div style={{ padding: '2rem', textAlign: 'center' }}>
-      <h2>Game in progress</h2>
-      <p>Round screen coming in the next phase.</p>
+    <div style={{ padding: '2rem', textAlign: 'center', color: '#e8eaf0' }}>
+      <h2>Voting phase</h2>
+      <p style={{ color: '#7b8099', marginTop: '0.5rem' }}>Voting screen coming next.</p>
     </div>
   );
 }
@@ -25,11 +17,12 @@ function GamePlaceholder() {
 export default function AppRoutes() {
   return (
     <Routes>
-      <Route path="/"      element={<Home />}            />
-      <Route path="/lobby" element={<Lobby />}           />
-      <Route path="/game"  element={<GamePlaceholder />} />
+      <Route path="/"       element={<Home />}              />
+      <Route path="/lobby"  element={<Lobby />}             />
+      <Route path="/game"   element={<Game />}              />
+      <Route path="/voting" element={<VotingPlaceholder />} />
 
-      {/* Catch-all: redirect unknown paths to home */}
+      {/* Catch-all */}
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
   );

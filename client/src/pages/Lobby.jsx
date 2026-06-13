@@ -67,6 +67,8 @@ export default function Lobby() {
     }
 
     function onGameStarting() {
+
+      socket.emit('round:start');
       // Server confirmed game is starting — move to round phase
       setStarting(false);
       setPhase('round');

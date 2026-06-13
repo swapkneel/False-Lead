@@ -38,6 +38,12 @@ const DEFAULT_STATE = {
   players:      [],
   roomStatus:   '',
   gamePhase:    'home',   // 'home' | 'lobby' | 'round' | 'voting' | 'results' | 'finished'
+
+  // Round data — populated when round:created + round:info both arrive
+  roundData: null,
+  // Shape: { roundId, roundNumber, totalRounds, roundType, category,
+  //   clueOrder:[{playerId,nickname,order}], role, receivedInfo,
+  //   isImposter, isOddOne, isSpy }
 };
 
 const STORAGE_KEY = 'falselead_session';
@@ -148,6 +154,17 @@ export function GameProvider({ children }) {
     setState(DEFAULT_STATE);
   }, []);
 
+  /**
+   * Stores data from round:created and round:info.
+   * Called twice per round — merges both payloads together.
+   */
+  const setRoundData = useCallback((data) => {
+    setState(prev => ({
+      ...prev,
+      roundData: { ...( prev.roundData || {}), ...data },
+    }));
+  }, []);
+
   const value = {
     // State
     ...state,
@@ -156,6 +173,7 @@ export function GameProvider({ children }) {
     setSession,
     updateLobby,
     setPhase,
+    setRoundData,
     resetSession,
   };
 
