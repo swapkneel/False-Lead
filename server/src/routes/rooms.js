@@ -16,15 +16,43 @@ const MAX_RETRIES      = 5;   // max attempts to find a unique code before givin
 
 const DEFAULT_PRESET       = 'classic';
 const DEFAULT_TOTAL_ROUNDS = 3;
-const DEFAULT_SETTINGS     = {
-  imposter_count:  'auto',
-  category_voting: true,
-  special_rounds: {
-    reverse_spy:  false,
-    similar_word: false,
-    chaos:        false,
+
+// FIX (Issue 2): Per-preset settings so party rooms have specials enabled.
+// classic — all specials off (safe for first-timers)
+// party   — all specials on  (more variety, assumes players know the game)
+// custom  — no specials by default; host configures manually
+const PRESET_SETTINGS = {
+  classic: {
+    imposter_count:  'auto',
+    category_voting: true,
+    special_rounds: {
+      reverse_spy:  false,
+      similar_word: false,
+      chaos:        false,
+    },
+  },
+  party: {
+    imposter_count:  'auto',
+    category_voting: true,
+    special_rounds: {
+      reverse_spy:  true,
+      similar_word: true,
+      chaos:        true,
+    },
+  },
+  custom: {
+    imposter_count:  'auto',
+    category_voting: true,
+    special_rounds: {
+      reverse_spy:  false,
+      similar_word: false,
+      chaos:        false,
+    },
   },
 };
+
+// Fallback for unknown preset values
+const DEFAULT_SETTINGS = PRESET_SETTINGS.classic;
 
 // ─────────────────────────────────────────────
 //  Helpers
@@ -125,12 +153,16 @@ router.post('/', async (req, res) => {
     ? totalRounds
     : DEFAULT_TOTAL_ROUNDS;
 
-  // Merge provided settings on top of defaults so missing keys are always present
+  // Pick the base settings from PRESET_SETTINGS, then merge any caller overrides.
+  // This means a 'party' room starts with specials enabled even if the client
+  // sends no settings at all.
+  const presetBase = PRESET_SETTINGS[resolvedPreset] || DEFAULT_SETTINGS;
+
   const resolvedSettings = {
-    ...DEFAULT_SETTINGS,
+    ...presetBase,
     ...(settings && typeof settings === 'object' ? settings : {}),
     special_rounds: {
-      ...DEFAULT_SETTINGS.special_rounds,
+      ...presetBase.special_rounds,
       ...(settings?.special_rounds && typeof settings.special_rounds === 'object'
         ? settings.special_rounds
         : {}),
@@ -406,10 +438,10 @@ router.post('/join', async (req, res) => {
     }
 
     // 3. Generate a session token and insert the player
-    //    crypto.randomUUID() produces a v4 UUID — no external package needed.
-    const sessionToken = crypto.randomUUID();
+const sessionToken = crypto.randomUUID();
 
-    const [hostRows] = await pool.query(
+// First player to join the room becomes host
+const [hostRows] = await pool.query(
   `SELECT COUNT(*) AS count
    FROM room_players
    WHERE room_id = ?`,
@@ -418,7 +450,7 @@ router.post('/join', async (req, res) => {
 
 const isHost = hostRows[0].count === 0 ? 1 : 0;
 
-    const [insertResult] = await pool.query(
+const [insertResult] = await pool.query(
   `INSERT INTO room_players
      (room_id, nickname, session_token, is_host)
    VALUES

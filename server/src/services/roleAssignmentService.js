@@ -95,23 +95,27 @@ function assignNormal(players, wordEntry, imposterCount) {
 
 /**
  * REVERSE SPY round.
- * One player receives the full word (the "spy").
- * Everyone else receives only the hint.
- * Goal: find the one person who knows the real word.
+ * One player (the "informant") receives the real word and knows their role.
+ * All other players are impostors — they receive the hint and know they
+ * are impostors. Goal: the majority must find the one informed player.
+ *
+ * FIX: previous version gave non-spy players role:'normal', which was wrong.
+ * They should know they are impostors (they have a hint, not the word).
+ * The informed player is role:'reverse_spy_target'.
  *
  * @param {object[]} players
  * @param {object}   wordEntry
  * @returns {object[]}
  */
 function assignReverseSpy(players, wordEntry) {
-  const shuffled  = shuffle([...players]);
-  const spyId     = shuffled[0].id;          // one random player gets the word
-  const clueOrder = buildClueOrder(players);
+  const shuffled   = shuffle([...players]);
+  const informantId = shuffled[0].id;   // one random player gets the real word
+  const clueOrder   = buildClueOrder(players);
 
   return players.map((p) => ({
     playerId:     p.id,
-    role:         p.id === spyId ? 'reverse_spy_target' : 'normal',
-    receivedInfo: p.id === spyId ? wordEntry.word : wordEntry.hint,
+    role:         p.id === informantId ? 'reverse_spy_target' : 'imposter',
+    receivedInfo: p.id === informantId ? wordEntry.word : wordEntry.hint,
     clueOrder:    clueOrder[p.id],
   }));
 }
