@@ -155,14 +155,26 @@ export function GameProvider({ children }) {
   }, []);
 
   /**
-   * Stores data from round:created and round:info.
-   * Called twice per round — merges both payloads together.
+   * Stores round data from round:created and round:info.
+   *
+   * FIX: The old merge-always approach caused stale receivedInfo to survive
+   * into Round 2. The new rule: if the incoming data contains a roundId that
+   * differs from the current roundId, it is a new round — replace entirely
+   * rather than merging. This clears stale role/receivedInfo from Round N-1.
+   *
+   * If no roundId is in the incoming data (i.e. it is round:info merging
+   * into an already-set round:created payload), merge normally.
    */
   const setRoundData = useCallback((data) => {
-    setState(prev => ({
-      ...prev,
-      roundData: { ...( prev.roundData || {}), ...data },
-    }));
+    setState(prev => {
+      const isNewRound = data.roundId && prev.roundData?.roundId !== data.roundId;
+      return {
+        ...prev,
+        roundData: isNewRound
+          ? data                                        // new round — start fresh
+          : { ...(prev.roundData || {}), ...data },    // same round — merge (e.g. round:info)
+      };
+    });
   }, []);
 
   const value = {

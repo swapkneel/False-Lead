@@ -78,6 +78,7 @@ async function emitRound(io, pool, { roomId, roomCode, roundNumber, totalRounds,
     category:    round.category,
     clueOrder:   publicClueOrder,
   });
+  
 
   // ── Phase 7b: private emit to each socket ─────────────────────────────
   // Fetch all sockets currently in this Socket.IO room and match them
@@ -88,14 +89,18 @@ async function emitRound(io, pool, { roomId, roomCode, roundNumber, totalRounds,
     const assignment = round.assignments.find(a => a.playerId === s.data.playerId);
     if (!assignment) continue;
 
+    // socketRole is what the player sees (hides chaos/similar_word identity).
+    // role is the DB truth used for scoring.
+    const visibleRole = assignment.socketRole ?? assignment.role;
+
     s.emit('round:info', {
       roundId:      round.roundId,
-      role:         assignment.role,
+      role:         visibleRole,
       receivedInfo: assignment.receivedInfo,
       clueOrder:    assignment.clueOrder,
-      isImposter:   assignment.role === 'imposter',
-      isOddOne:     assignment.role === 'similar_word_target',
-      isSpy:        assignment.role === 'reverse_spy_target',
+      isImposter:   visibleRole === 'imposter',
+      isOddOne:     false,    // never tell the client they are the odd one
+      isSpy:        visibleRole === 'reverse_spy_target',
     });
   }
 

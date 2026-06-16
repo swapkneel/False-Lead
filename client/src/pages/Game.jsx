@@ -1,17 +1,14 @@
 // client/src/pages/Game.jsx
 // ─────────────────────────────────────────────────────────────────────────────
-//  Round Screen.
+//  Round Screen — "Opening the Case File"
 //
-//  Listens for:
-//    round:created  — public round info (category, type, clue order)
-//    round:info     — private role info for this player only
-//    ready:update   — how many players are ready
-//    voting:start   — navigate to /voting
-//
-//  Both round:created and round:info arrive quickly after each other.
-//  We store them separately in roundData (via setRoundData) and merge.
-//  The screen renders as soon as round:created arrives; the role card
-//  fades in once round:info arrives.
+//  Changes from previous version:
+//    1. Round type is NEVER displayed publicly — header shows only
+//       Round N/Total and Category.
+//    2. similar_word_target removed from ROLE_CONFIG — that player
+//       now receives role:'normal' from the server and sees identical UI.
+//    3. Visual redesign: case-file / classified document aesthetic.
+//    4. Listens for round:next to reset state for the next round.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState, useCallback } from 'react';
@@ -21,144 +18,135 @@ import socket                                from '../services/socket';
 
 // ─────────────────────────────────────────────
 //  Role configuration
-//  Drives the card colour, icon, label, and hint text per role.
+//  similar_word_target deliberately absent — server sends 'normal' for that role.
+//  Chaos players also receive 'normal'. This table only needs two real entries.
 // ─────────────────────────────────────────────
-
-
 
 const ROLE_CONFIG = {
   normal: {
-    label:    'Agent',
-    icon:     '🔍',
-    colorVar: '--role-agent',
-    bg:       'rgba(0, 229, 195, 0.08)',
-    border:   'rgba(0, 229, 195, 0.35)',
-    glow:     'rgba(0, 229, 195, 0.18)',
-    hint:     'You know the secret. Find the impostor among you.',
+    label:       'Field Agent',
+    eyebrow:     'CLEARANCE LEVEL · STANDARD',
+    icon:        '🔍',
+    bg:          'rgba(0, 229, 195, 0.06)',
+    border:      '#00e5c3',
+    glow:        'rgba(0, 229, 195, 0.15)',
+    infoLabel:   'CLASSIFIED WORD',
+    hint:        'Your word is the truth. Find the one who does not know it.',
   },
   imposter: {
-    label:    'Impostor',
-    icon:     '🎭',
-    colorVar: '--role-impostor',
-    bg:       'rgba(255, 77, 106, 0.08)',
-    border:   'rgba(255, 77, 106, 0.4)',
-    glow:     'rgba(255, 77, 106, 0.2)',
-    hint:     'You have a clue, not the word. Blend in. Survive.',
-  },
-  similar_word_target: {
-    label:    'Odd One',
-    icon:     '🃏',
-    colorVar: '--role-odd',
-    bg:       'rgba(255, 170, 0, 0.08)',
-    border:   'rgba(255, 170, 0, 0.4)',
-    glow:     'rgba(255, 170, 0, 0.2)',
-    hint:     'Your word is different. Blend in — no one must notice.',
+    label:       'Infiltrator',
+    eyebrow:     'CLEARANCE LEVEL · RESTRICTED',
+    icon:        '🎭',
+    bg:          'rgba(255, 77, 106, 0.06)',
+    border:      '#ff4d6a',
+    glow:        'rgba(255, 77, 106, 0.18)',
+    infoLabel:   'YOUR COVER CLUE',
+    hint:        'You have a clue — not the word. Blend in. Do not get caught.',
   },
   reverse_spy_target: {
-    label:    'Informant',
-    icon:     '📋',
-    colorVar: '--role-informant',
-    bg:       'rgba(160, 100, 255, 0.08)',
-    border:   'rgba(160, 100, 255, 0.4)',
-    glow:     'rgba(160, 100, 255, 0.2)',
-    hint:     'You alone know the real word. Everyone else has only the clue.',
+    label:       'Informant',
+    eyebrow:     'CLEARANCE LEVEL · EYES ONLY',
+    icon:        '📋',
+    bg:          'rgba(160, 100, 255, 0.06)',
+    border:      '#a064ff',
+    glow:        'rgba(160, 100, 255, 0.18)',
+    infoLabel:   'CLASSIFIED WORD',
+    hint:        'You alone know the real word. The others are watching you.',
   },
 };
 
-// Fallback for any unexpected role value
-const DEFAULT_ROLE_CONFIG = {
-  label:  'Unknown',
-  icon:   '❓',
-  bg:     'rgba(123, 128, 153, 0.1)',
-  border: 'rgba(123, 128, 153, 0.3)',
-  glow:   'transparent',
-  hint:   '',
+const DEFAULT_CONFIG = {
+  label:     'Agent',
+  eyebrow:   'CLEARANCE LEVEL · UNKNOWN',
+  icon:      '❓',
+  bg:        'rgba(123,128,153,0.08)',
+  border:    '#454961',
+  glow:      'transparent',
+  infoLabel: 'YOUR INFO',
+  hint:      '',
 };
 
 function getRoleConfig(role) {
-  return ROLE_CONFIG[role] || DEFAULT_ROLE_CONFIG;
+  return ROLE_CONFIG[role] || DEFAULT_CONFIG;
 }
-
-// Human-readable round type labels
-const ROUND_TYPE_LABELS = {
-  normal:       'Standard Round',
-  reverse_spy:  'Reverse Spy',
-  similar_word: 'Similar Word',
-  chaos:        'Standard Round',   // chaos disguises itself
-};
 
 // ─────────────────────────────────────────────
 //  Sub-components
 // ─────────────────────────────────────────────
 
-/**
- * Displays the player's secret role and received information.
- * The most important element on screen — gets the most visual weight.
- */
-
-
-function RoleCard({ role, receivedInfo, hint }) {
-  const cfg = getRoleConfig(role);
-
+function CaseFileHeader({ roundNumber, totalRounds, category }) {
   return (
-    <div
-      className="role-card"
-      style={{
-        background:   cfg.bg,
-        borderColor:  cfg.border,
-        boxShadow:    `0 0 32px ${cfg.glow}`,
-      }}
-    >
-      <div className="role-card-header">
-        <span className="role-icon" aria-hidden="true">{cfg.icon}</span>
-        <div>
-          <p className="role-eyebrow">Your Role</p>
-          <h2 className="role-label">{cfg.label}</h2>
-        </div>
+    <div className="cf-header">
+      <div className="cf-stamp-row">
+        <span className="cf-case-label">CASE FILE</span>
+        <span className="cf-round-num">{String(roundNumber).padStart(2,'0')} / {String(totalRounds).padStart(2,'0')}</span>
       </div>
-
-      <div className="role-divider" style={{ borderColor: cfg.border }} />
-
-      <div className="role-info-block">
-        <p className="role-info-label">
-          {role === 'imposter' ? 'Your Clue' : 'Your Word'}
-        </p>
-        <p
-          className="role-info-value"
-          style={{ color: cfg.border.replace('0.4)', '0.9)').replace('0.35)', '0.9)') }}
-        >
-          {receivedInfo}
-        </p>
+      <div className="cf-category-row">
+        <span className="cf-category-icon" aria-hidden="true">📁</span>
+        <span className="cf-category">{category}</span>
       </div>
-
-      {hint && <p className="role-hint">{hint}</p>}
     </div>
   );
 }
 
-/**
- * Shows who speaks in what order this round.
- * The current player's row is highlighted.
- */
-function ClueOrderList({ clueOrder = [], myClueOrder, players = [] }) {
+function EvidenceCard({ role, receivedInfo }) {
+  const cfg = getRoleConfig(role);
+
   return (
-    <div className="clue-order-panel">
-      <h3 className="panel-title">
-        <span className="panel-title-icon">💬</span> Speaking Order
-      </h3>
-      <ol className="clue-order-list">
+    <div
+      className="evidence-card"
+      style={{
+        '--card-border': cfg.border,
+        '--card-bg':     cfg.bg,
+        '--card-glow':   cfg.glow,
+      }}
+    >
+      {/* Top strip — classification level */}
+      <div className="evidence-card__strip">
+        <span className="evidence-card__eyebrow">{cfg.eyebrow}</span>
+        <span className="evidence-card__icon">{cfg.icon}</span>
+      </div>
+
+      {/* Role name */}
+      <div className="evidence-card__role-row">
+        <span className="evidence-card__role-tag">ROLE</span>
+        <span className="evidence-card__role-name">{cfg.label}</span>
+      </div>
+
+      {/* The word / clue — dominant element */}
+      <div className="evidence-card__word-block">
+        <p className="evidence-card__word-label">{cfg.infoLabel}</p>
+        <p className="evidence-card__word">{receivedInfo}</p>
+      </div>
+
+      {/* Flavour hint */}
+      {cfg.hint && (
+        <p className="evidence-card__hint">{cfg.hint}</p>
+      )}
+
+      {/* Decorative redaction bars */}
+      <div className="evidence-card__redact" aria-hidden="true">
+        <span /><span /><span />
+      </div>
+    </div>
+  );
+}
+
+function WitnessOrder({ clueOrder = [], myClueOrder }) {
+  return (
+    <div className="witness-panel">
+      <div className="witness-panel__header">
+        <span className="witness-panel__icon" aria-hidden="true">📋</span>
+        <span className="witness-panel__title">WITNESS ORDER</span>
+      </div>
+      <ol className="witness-list">
         {clueOrder.map((entry) => {
           const isMe = entry.order === myClueOrder;
           return (
-            <li
-              key={entry.playerId}
-              className={`clue-order-item ${isMe ? 'clue-order-item--me' : ''}`}
-            >
-              <span className="clue-order-num">{entry.order}</span>
-              <span className="clue-order-name">
-                {entry.nickname}
-                {isMe && <span className="clue-order-you-tag">you</span>}
-              </span>
+            <li key={entry.playerId} className={`witness-item ${isMe ? 'witness-item--me' : ''}`}>
+              <span className="witness-num">{String(entry.order).padStart(2,'0')}</span>
+              <span className="witness-name">{entry.nickname}</span>
+              {isMe && <span className="witness-you">YOU</span>}
             </li>
           );
         })}
@@ -167,104 +155,49 @@ function ClueOrderList({ clueOrder = [], myClueOrder, players = [] }) {
   );
 }
 
-/**
- * Round header: round counter, round type badge, category.
- */
-function RoundHeader({ roundNumber, totalRounds, roundType, category }) {
-  const typeLabel = ROUND_TYPE_LABELS[roundType] || roundType;
-
-  return (
-    <div className="round-header">
-      <div className="round-counter">
-        <span className="round-counter-current">{roundNumber}</span>
-        <span className="round-counter-sep">/</span>
-        <span className="round-counter-total">{totalRounds}</span>
-      </div>
-
-      <div className="round-meta">
-        <span className="round-type-badge">{typeLabel}</span>
-        <span className="round-category">
-          <span className="round-category-icon" aria-hidden="true">📁</span>
-          {category}
-        </span>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Ready system: button + live count of players who are ready.
- */
 function ReadyPanel({ readyCount, totalPlayers, onReady, isReady }) {
-  const allReady = readyCount >= totalPlayers && totalPlayers > 0;
-
   return (
     <div className="ready-panel">
       <div className="ready-count-row">
         <span className="ready-pips">
           {Array.from({ length: totalPlayers }).map((_, i) => (
-            <span
-              key={i}
-              className={`ready-pip ${i < readyCount ? 'ready-pip--lit' : ''}`}
-              aria-hidden="true"
-            />
+            <span key={i} className={`ready-pip ${i < readyCount ? 'ready-pip--lit' : ''}`} />
           ))}
         </span>
         <span className="ready-count-label">
-          {readyCount} / {totalPlayers}
-          {allReady ? ' · Starting…' : ' ready'}
+          {readyCount} / {totalPlayers} ready
         </span>
       </div>
-
       <button
         className={`btn btn--full ready-btn ${isReady ? 'ready-btn--done' : 'btn--primary'}`}
         onClick={onReady}
         disabled={isReady}
         aria-pressed={isReady}
       >
-        {isReady ? '✓ Ready' : 'Ready to Vote'}
+        {isReady ? '✓ Ready to Vote' : 'Ready to Vote'}
       </button>
     </div>
   );
 }
 
 // ─────────────────────────────────────────────
-//  Main page component
+//  Page
 // ─────────────────────────────────────────────
 
 export default function Game() {
   const navigate = useNavigate();
-  const {
-    sessionToken,
-    roomCode,
-    roundData,
-    players,
-    setRoundData,
-    setPhase,
-  } = useGame();
+  const { sessionToken, roomCode, roundData, players, setRoundData, setPhase } = useGame();
 
-  const [readyCount,    setReadyCount]    = useState(0);
-  const [isReady,       setIsReady]       = useState(false);
-  const [roleVisible,   setRoleVisible]   = useState(false);
+  const [readyCount,  setReadyCount]  = useState(0);
+  const [isReady,     setIsReady]     = useState(false);
+  const [cardVisible, setCardVisible] = useState(false);
 
-  // totalPlayers from live players list in context, fallback to clueOrder length
-  const totalPlayers = players.length ||
-    (roundData?.clueOrder ? roundData.clueOrder.length : 0);
+  const totalPlayers = players.length || (roundData?.clueOrder?.length ?? 0);
 
-  // ── Redirect if no session ─────────────────────────────────────────────
   useEffect(() => {
-  console.log("GAME COMPONENT MOUNTED");
-}, []);
-  
-  useEffect(() => {
-    if (!sessionToken || !roomCode) {
-      navigate('/', { replace: true });
-    }
+    if (!sessionToken || !roomCode) navigate('/', { replace: true });
   }, [sessionToken, roomCode, navigate]);
 
-  // ── Authenticate socket if needed ──────────────────────────────────────
-  // The socket may have been authenticated during Lobby but socket events
-  // don't require re-joining — the socket room persists across navigation.
   useEffect(() => {
     if (!sessionToken) return;
     if (!socket.connected) {
@@ -273,68 +206,69 @@ export default function Game() {
     }
   }, [sessionToken]);
 
-  // ── Socket listeners ───────────────────────────────────────────────────
+  // If roundData already contains role when this component mounts (the normal
+  // case for Round 2+, where Result.jsx stored everything before navigating),
+  // show the card immediately without waiting for a socket event.
+  useEffect(() => {
+    if (roundData?.role && roundData?.receivedInfo) {
+      setTimeout(() => setCardVisible(true), 150);
+    }
+  }, [roundData?.roundId]);  // re-run only when roundId changes (new round)
+
   useEffect(() => {
     if (!sessionToken) return;
 
-    // Public round info: category, type, speaking order
-    function onRoundCreated(data) {
-      // data: { roundId, roundNumber, totalRounds, roundType, category, clueOrder }
-      setRoundData({
-        roundId:     data.roundId,
-        roundNumber: data.roundNumber,
-        totalRounds: data.totalRounds,
-        roundType:   data.roundType,
-        category:    data.category,
-        clueOrder:   data.clueOrder,
-      });
-      setIsReady(false);
-      setReadyCount(0);
-      setRoleVisible(false);
-    }
+    // ROOT CAUSE FIX:
+    // round:created and round:info are now handled in Result.jsx BEFORE
+    // navigation to /game. By the time Game.jsx mounts, context already has
+    // the complete round data (public + private). Game.jsx does NOT need to
+    // listen for round:created at all — data is already there.
+    //
+    // round:info is kept here as a safety net only: if somehow this component
+    // is mounted and a new round:info arrives (e.g. host starts round 1 from
+    // lobby directly), we store it and show the card.
 
-    // Private info: role + secret word/hint
+    function onRoundCreated(data) {
+  setRoundData({
+    roundId: data.roundId,
+    roundNumber: data.roundNumber,
+    totalRounds: data.totalRounds,
+    category: data.category,
+    clueOrder: data.clueOrder,
+  });
+}
+
     function onRoundInfo(data) {
-      // data: { roundId, role, receivedInfo, clueOrder, isImposter, isOddOne, isSpy }
+      // Safety net — normally this fires in Result.jsx before navigation.
+      // If we receive it here it means Game.jsx was already mounted (round 1
+      // started from lobby). Store and show.
       setRoundData({
         role:         data.role,
         receivedInfo: data.receivedInfo,
         myClueOrder:  data.clueOrder,
-        isImposter:   data.isImposter,
-        isOddOne:     data.isOddOne,
-        isSpy:        data.isSpy,
       });
-      // Small delay so the card entrance feels intentional
-      setTimeout(() => setRoleVisible(true), 120);
+      setTimeout(() => setCardVisible(true), 150);
     }
 
-    // Live count of players who clicked Ready
-    function onReadyUpdate(data) {
-      // data: { readyCount, totalPlayers }
-      setReadyCount(data.readyCount);
-    }
+    function onReadyUpdate(data) { setReadyCount(data.readyCount); }
 
-    // All players ready — backend starts voting phase
     function onVotingStart() {
       setPhase('voting');
       navigate('/voting');
     }
 
     socket.on('round:created', onRoundCreated);
-    socket.on('round:info', onRoundInfo);
-
-    socket.on('ready:update',   onReadyUpdate);
-    socket.on('voting:start',   onVotingStart);
+    socket.on('round:info',   onRoundInfo);
+    socket.on('ready:update', onReadyUpdate);
+    socket.on('voting:start', onVotingStart);
 
     return () => {
-      socket.off('round:created',  onRoundCreated);
-      socket.off('round:info',     onRoundInfo);
-      socket.off('ready:update',   onReadyUpdate);
-      socket.off('voting:start',   onVotingStart);
+      socket.off('round:created', onRoundCreated);
+      socket.off('round:info',   onRoundInfo);
+      socket.off('ready:update', onReadyUpdate);
+      socket.off('voting:start', onVotingStart);
     };
   }, [sessionToken, setRoundData, setPhase, navigate]);
-
-  // ── Handlers ───────────────────────────────────────────────────────────
 
   const handleReady = useCallback(() => {
     if (isReady) return;
@@ -342,68 +276,47 @@ export default function Game() {
     socket.emit('player:ready');
   }, [isReady]);
 
-  // ── Loading state ──────────────────────────────────────────────────────
-  // Show a case-file themed waiting screen while round data arrives
   if (!roundData?.roundId) {
     return (
       <div className="game-page game-page--loading">
         <div className="loading-case">
-          <span className="loading-icon" aria-hidden="true">📂</span>
-          <p className="loading-text">Opening case file…</p>
+          <div className="loading-folder" aria-hidden="true">📂</div>
+          <p className="loading-text">RETRIEVING CASE FILE…</p>
+          <p className="loading-subtext">Stand by for your assignment</p>
         </div>
       </div>
     );
   }
 
-  const {
-    roundNumber, totalRounds, roundType, category,
-    clueOrder, role, receivedInfo, myClueOrder,
-  } = roundData;
+  const { roundNumber, totalRounds, category, clueOrder, role, receivedInfo, myClueOrder } = roundData;
 
-  const roleHint = role ? getRoleConfig(role).hint : '';
-
-  // ── Render ─────────────────────────────────────────────────────────────
   return (
     <div className="game-page">
-
-      {/* ── Top: round context ── */}
-      <RoundHeader
+      <CaseFileHeader
         roundNumber={roundNumber}
         totalRounds={totalRounds}
-        roundType={roundType}
         category={category}
       />
 
-      {/* ── Centre: role card — the dominant element ── */}
-      <div className={`role-card-wrapper ${roleVisible ? 'role-card-wrapper--visible' : ''}`}>
+      <div className={`evidence-card-wrapper ${cardVisible ? 'evidence-card-wrapper--visible' : ''}`}>
         {role ? (
-          <RoleCard
-            role={role}
-            receivedInfo={receivedInfo}
-            hint={roleHint}
-          />
+          <EvidenceCard role={role} receivedInfo={receivedInfo} />
         ) : (
-          <div className="role-card-skeleton" aria-busy="true">
-            <p className="loading-text">Receiving your assignment…</p>
+          <div className="evidence-card-skeleton">
+            <p className="loading-text">DECRYPTING ASSIGNMENT…</p>
           </div>
         )}
       </div>
 
-      {/* ── Speaking order ── */}
-      {clueOrder && clueOrder.length > 0 && (
-        <ClueOrderList
-          clueOrder={clueOrder}
-          myClueOrder={myClueOrder}
-        />
+      {clueOrder?.length > 0 && (
+        <WitnessOrder clueOrder={clueOrder} myClueOrder={myClueOrder} />
       )}
 
-      {/* ── Discussion reminder ── */}
-      <div className="discussion-notice">
-        <span className="discussion-icon" aria-hidden="true">🗣</span>
-        <p>Discuss with your group. Give clues in the order above.</p>
+      <div className="interrogation-notice">
+        <span aria-hidden="true">🗣</span>
+        <p>State your clue when it is your turn. No discussion until all clues are given.</p>
       </div>
 
-      {/* ── Ready panel: pinned to bottom ── */}
       <div className="ready-panel-wrapper">
         <ReadyPanel
           readyCount={readyCount}

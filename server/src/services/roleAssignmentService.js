@@ -135,31 +135,75 @@ function assignSimilarWord(players, wordEntry) {
   const oddPlayerId = shuffled[0].id;
   const clueOrder   = buildClueOrder(players);
 
-  return players.map((p) => ({
-    playerId:     p.id,
-    role:         p.id === oddPlayerId ? 'similar_word_target' : 'normal',
-    receivedInfo: p.id === oddPlayerId ? wordEntry.alternate_word : wordEntry.word,
-    clueOrder:    clueOrder[p.id],
-  }));
+  // DESIGN: The odd player must believe they are normal.
+  // We store 'similar_word_target' in dbRole for scoring,
+  // but emit 'normal' as the socketRole so their UI is identical
+  // to every other player. Only their word differs.
+  return players.map((p) => {
+    const isOdd = p.id === oddPlayerId;
+    return {
+      playerId:     p.id,
+      dbRole:       isOdd ? 'similar_word_target' : 'normal',   // persisted to round_players
+      socketRole:   'normal',                                     // what the player sees
+      receivedInfo: isOdd ? wordEntry.alternate_word : wordEntry.word,
+      clueOrder:    clueOrder[p.id],
+    };
+  });
 }
 
 /**
  * CHAOS round.
- * Every player receives imposter-style treatment.
- * No word exists — everyone gets a generic cover hint.
- * Players don't know this is a chaos round; the game proceeds as normal.
+ * Players are split into groups. Each group gets a different real word.
+ * Nobody knows this is a chaos round — it appears to be a normal round
+ * where everyone happens to give slightly different clues.
+ *
+ * Group distribution by player count:
+ *   4 → 2/2      5 → 3/2      6 → 2/2/2
+ *   7 → 3/2/2    8 → 3/3/2    9+ → equal thirds
+ *
+ * wordEntry.chaosGroups must be an array of 2-3 distinct real words
+ * provided by wordService.selectWordsForChaos.
  *
  * @param {object[]} players
+ * @param {object}   wordEntry   — must have chaosGroups: string[]
  * @returns {object[]}
  */
-function assignChaos(players) {
+function assignChaos(players, wordEntry) {
+  const groups    = wordEntry.chaosGroups || ['Alpha', 'Beta'];   // fallback never shown
+  const n         = players.length;
   const clueOrder = buildClueOrder(players);
 
-  return players.map((p) => ({
-    playerId:     p.id,
-    role:         'imposter',
-    receivedInfo: '???',    // everyone is lost — the chaos
-    clueOrder:    clueOrder[p.id],
+  // Decide how many groups to use (2 or 3)
+  const useThreeGroups = groups.length >= 3 && n >= 6;
+  const groupCount     = useThreeGroups ? 3 : 2;
+
+  // Build group size distribution — largest group(s) first
+  function buildGroupSizes(total, numGroups) {
+    const base  = Math.floor(total / numGroups);
+    const extra = total % numGroups;
+    // First `extra` groups get base+1, rest get base
+    return Array.from({ length: numGroups }, (_, i) => base + (i < extra ? 1 : 0));
+  }
+
+  const groupSizes  = buildGroupSizes(n, groupCount);
+  const shuffled    = shuffle([...players]);
+
+  // Assign each player to a group
+  const playerGroups = [];
+  let cursor = 0;
+  for (let g = 0; g < groupCount; g++) {
+    for (let i = 0; i < groupSizes[g]; i++) {
+      playerGroups.push({ player: shuffled[cursor], groupIndex: g });
+      cursor++;
+    }
+  }
+
+  return playerGroups.map(({ player, groupIndex }) => ({
+    playerId:     player.id,
+    dbRole:       'imposter',           // all chaos players are impostors internally
+    socketRole:   'normal',             // everyone appears normal to themselves
+    receivedInfo: groups[groupIndex],   // their group's real word
+    clueOrder:    clueOrder[player.id],
   }));
 }
 
@@ -203,24 +247,36 @@ function buildAssignments({ players, roundType, wordEntry, settings }) {
     players.length
   );
 
+  // assignNormal and assignReverseSpy return { role } directly.
+  // assignSimilarWord and assignChaos return { dbRole, socketRole } to
+  // distinguish what is stored in the DB vs what the player sees.
+  // Normalise everything to { role, socketRole } before returning.
+  let rawAssignments;
+
   switch (roundType) {
     case ROUND_TYPES.NORMAL:
-      return assignNormal(players, wordEntry, imposterCount);
-
+      rawAssignments = assignNormal(players, wordEntry, imposterCount);
+      break;
     case ROUND_TYPES.REVERSE_SPY:
-      return assignReverseSpy(players, wordEntry);
-
+      rawAssignments = assignReverseSpy(players, wordEntry);
+      break;
     case ROUND_TYPES.SIMILAR_WORD:
-      return assignSimilarWord(players, wordEntry);
-
+      rawAssignments = assignSimilarWord(players, wordEntry);
+      break;
     case ROUND_TYPES.CHAOS:
-      return assignChaos(players);
-
+      rawAssignments = assignChaos(players, wordEntry);
+      break;
     default:
-      // Unknown type — fall back to normal so the game never hard-crashes
       console.warn(`[roleAssignment] Unknown round type "${roundType}", falling back to normal`);
-      return assignNormal(players, wordEntry, imposterCount);
+      rawAssignments = assignNormal(players, wordEntry, imposterCount);
   }
+
+  // Normalise: if dbRole/socketRole exist, promote them; otherwise copy role to both.
+  return rawAssignments.map(a => ({
+    ...a,
+    role:       a.dbRole       ?? a.role,   // what goes into round_players.role (truth)
+    socketRole: a.socketRole   ?? a.role,   // what is sent in round:info (what player sees)
+  }));
 }
 
 module.exports = { buildAssignments, resolveImposterCount };

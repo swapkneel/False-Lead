@@ -25,6 +25,7 @@
 const { getRoundState, clearRoundState } = require('../roundState');
 const { tallyVotes, buildVoteBreakdown } = require('../../services/votingService');
 const { calculateDeltas, applyDeltas, fetchUpdatedScores } = require('../../services/scoringService');
+const { emitRound } = require('../utils/emitRound');
 
 const VOTE_DURATION_MS  = 30_000;   // 30 seconds
 const VOTE_TICK_MS      = 1_000;    // broadcast timer every second
@@ -77,6 +78,76 @@ function registerVoteHandlers(socket, io, pool) {
     // If all players are ready, start voting immediately
     if (readyCount >= totalPlayers) {
       await startVotingPhase(io, pool, socket.data.roomCode, state);
+    }
+  });
+
+
+  // ── round:start-next ─────────────────────────────────────────────────
+  //
+  // Host-only. Emitted from the Result screen after a round ends.
+  // Creates and emits the next round using the existing emitRound utility.
+  //
+  // Validation:
+  //   - Must be host
+  //   - Room must be in_progress
+  //   - Must not be the final round (current_round < total_rounds)
+  socket.on('round:start-next', async () => {
+    if (!socket.data.roomCode) {
+      return socket.emit('error', { code: 'NOT_IN_ROOM', message: 'Not in a room.' });
+    }
+    if (!socket.data.isHost) {
+      return socket.emit('error', { code: 'NOT_HOST', message: 'Only the host can start the next round.' });
+    }
+
+    try {
+      const [roomRows] = await pool.query(
+        `SELECT id, status, current_round, total_rounds, settings_json AS settingsJson
+         FROM   rooms
+         WHERE  id = ?
+         LIMIT  1`,
+        [socket.data.roomId]
+      );
+
+      if (roomRows.length === 0) {
+        return socket.emit('error', { code: 'ROOM_NOT_FOUND', message: 'Room not found.' });
+      }
+
+      const room = roomRows[0];
+
+      if (room.status !== 'in_progress') {
+        return socket.emit('error', {
+          code:    'INVALID_STATE',
+          message: `Cannot start next round — room is "${room.status}".`,
+        });
+      }
+
+      if (room.current_round >= room.total_rounds) {
+        return socket.emit('error', {
+          code:    'GAME_OVER',
+          message: 'All rounds have already been played.',
+        });
+      }
+
+      const settings = typeof room.settingsJson === 'string'
+        ? JSON.parse(room.settingsJson)
+        : room.settingsJson;
+
+      await emitRound(io, pool, {
+        roomId:      socket.data.roomId,
+        roomCode:    socket.data.roomCode,
+        roundNumber: room.current_round + 1,
+        totalRounds: room.total_rounds,
+        settings,
+      });
+
+      console.log(
+        `[vote] Host ${socket.data.nickname} started round ` +
+        `${room.current_round + 1} in ${socket.data.roomCode}`
+      );
+
+    } catch (err) {
+      console.error('[round:start-next] Error:', err.message);
+      socket.emit('error', { code: 'SERVER_ERROR', message: 'Failed to start next round.' });
     }
   });
 
@@ -213,18 +284,18 @@ async function startVotingPhase(io, pool, roomCode, state) {
   // Broadcast a countdown tick every second
   let secondsLeft = VOTE_DURATION_MS / 1000;
 
-  const tickInterval = setInterval(() => {
+  state.voteInterval = setInterval(() => {
     secondsLeft--;
     io.to(roomCode).emit('vote:timer', { secondsRemaining: secondsLeft });
 
     if (secondsLeft <= 0) {
-      clearInterval(tickInterval);
+      clearInterval(state.voteInterval);
     }
   }, VOTE_TICK_MS);
 
   // 30-second hard deadline
   state.voteTimer = setTimeout(async () => {
-    clearInterval(tickInterval);
+    clearInterval(state.voteInterval);
     // Only resolve if still in voting (not already resolved by early completion)
     const currentState = getRoundState(roomCode);
     if (currentState && currentState.phase === 'voting') {
@@ -251,6 +322,11 @@ async function resolveVoting(io, pool, roomCode, state) {
   // Prevent double-resolution if timer fires just as the last vote arrives
   if (state.phase === 'results') return;
   state.phase = 'results';
+  clearTimeout(state.voteTimer);
+
+if (state.voteInterval) {
+  clearInterval(state.voteInterval);
+}
 
   try {
     // ── Fetch round context from DB ──────────────────────────────────
@@ -388,11 +464,17 @@ async function resolveVoting(io, pool, roomCode, state) {
       console.log(`[vote] Game finished in ${roomCode}`);
 
     } else {
-      // More rounds remain — prompt host to start the next one
-      io.to(roomCode).emit('round:next', {
-        nextRoundNumber: round.current_round + 1,
-        totalRounds:     round.total_rounds,
-      });
+      // More rounds remain.
+      // Emit round:next as a UI signal so the result screen knows to show
+      // the host a "Start Next Round" button and non-hosts a waiting message.
+      // The host then emits round:start-next to actually begin the next round.
+      // No automatic timer, no automatic round creation here.
+      setTimeout(() => {
+  io.to(roomCode).emit('round:next', {
+    nextRoundNumber: round.current_round + 1,
+    totalRounds:     round.total_rounds,
+  });
+}, 500);
     }
 
   } catch (err) {

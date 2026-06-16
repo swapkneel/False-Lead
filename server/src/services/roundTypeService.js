@@ -76,14 +76,28 @@ function selectRoundType({ settings, currentRound, totalRounds, usedRoundTypes }
   // Only inject a special round after round 1 so players understand
   // the basic game before seeing a variant.
   if (availableSpecials.length > 0 && currentRound > 1) {
-    // Probability scales with how many rounds are left so specials
-    // are spread across the game rather than all firing at the start.
+    // FIX (Issue 5): old formula produced triggerChance = 1.0 on round 2
+    // of a 3-round game (2/max(2,2) = 1.0), meaning both specials always fired.
+    //
+    // New formula guarantees all enabled specials fire across the game,
+    // but caps per-round chance at 0.6 so the distribution feels natural:
+    //
+    //   roundsRemaining = total - current          (rounds still to play after this one)
+    //   specialsRemaining = how many specials left to inject
+    //   base chance = specialsRemaining / (roundsRemaining + 1)  — needs to fire in remaining window
+    //   capped at 0.6 so no single round feels overwhelmingly likely
+    //
+    // Examples for 5-round game with 2 specials enabled:
+    //   Round 2: 2/(4) = 0.50 — moderate chance
+    //   Round 3: 1/(3) = 0.33 — lower (one special already fired)
+    //   Round 4: 1/(2) = 0.50 — rises as window closes
+    //   Round 5: 1/(1) = 1.00 (capped 0.6) — guaranteed before last round
     const roundsRemaining   = totalRounds - currentRound;
     const specialsRemaining = availableSpecials.length;
-    const triggerChance     = specialsRemaining / Math.max(roundsRemaining + 1, specialsRemaining);
+    const rawChance         = specialsRemaining / (roundsRemaining + 1);
+    const triggerChance     = Math.min(rawChance, 0.6);
 
     if (Math.random() < triggerChance) {
-      // Pick a random special from the available pool
       const idx = Math.floor(Math.random() * availableSpecials.length);
       return availableSpecials[idx];
     }

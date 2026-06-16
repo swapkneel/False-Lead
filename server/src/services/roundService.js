@@ -17,7 +17,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
-const { resolveCategory, selectWord, selectWordWithAlternate } = require('./wordService');
+const { resolveCategory, selectWord, selectWordWithAlternate, selectWordsForChaos } = require('./wordService');
 const { selectRoundType, ROUND_TYPES }                         = require('./roundTypeService');
 const { buildAssignments }                                     = require('./roleAssignmentService');
 
@@ -89,8 +89,18 @@ async function createRound(pool, {
       }
     }
   } else if (roundType === ROUND_TYPES.CHAOS) {
-    // Chaos doesn't use a real word — insert placeholder values
-    wordEntry = { word: '???', hint: '???', alternate_word: null };
+    // Chaos uses real word groups so nobody gets '???' and the round
+    // appears normal. chaosGroups is passed to roleAssignmentService
+    // which distributes players across groups.
+    // The sentinel 'CHAOS' is stored in rounds.word so results can
+    // identify chaos rounds without exposing the group words in the record.
+    const chaosGroups = await selectWordsForChaos(pool, category);
+    wordEntry = {
+      word:          'CHAOS',   // sentinel — never shown to players
+      hint:          'CHAOS',
+      alternate_word: null,
+      chaosGroups,              // array of 2-3 real words, one per group
+    };
   } else {
     wordEntry = await selectWord(pool, category);
   }
