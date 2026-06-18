@@ -1,34 +1,9 @@
 // server/src/services/scoringService.js
-// ─────────────────────────────────────────────────────────────────────────────
-//  Calculates score deltas for a completed round and writes them to the DB.
-//
-//  Scoring rules:
-//
-//  NORMAL round
-//    Normal player:  +1 if imposter was eliminated (correct vote)
-//    Imposter:       +2 if imposter survived (not eliminated)
-//
-//  REVERSE SPY round
-//    Normal player:  +1 if spy was eliminated
-//    Spy target:     +2 if spy survived
-//
-//  SIMILAR WORD round
-//    Normal player:  +1 if odd-one-out was eliminated
-//    Odd player:     +2 if odd-one-out survived
-//
-//  CHAOS round
-//    Everyone:       +0  (no points, no correct answer exists)
-//
-//  Design note:
-//    This service receives the pre-computed tally result and the full
-//    round_players list. It is pure logic until the final DB write step.
-//    The separation keeps scoring testable without a live database.
-// ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
 const { ROUND_TYPES } = require('./roundTypeService');
 
-// Roles that are "the target" — the player everyone is trying to find
+// Roles that are "the target" — the player the group is trying to find
 const TARGET_ROLES = new Set([
   'imposter',
   'reverse_spy_target',
@@ -38,44 +13,80 @@ const TARGET_ROLES = new Set([
 /**
  * Calculates score deltas for every player in a round.
  *
- * @param {object} params
- * @param {string}   params.roundType         — one of ROUND_TYPES
- * @param {object[]} params.roundPlayers       — [{ playerId, role }]
- * @param {object}   params.tallyResult        — output of votingService.tallyVotes()
+ * Scoring rules (all round types except chaos):
  *
- * @returns {object[]} deltas — [{ playerId, delta }]
- *   delta is 0 for players who earn nothing this round.
- *   Always one entry per player so the caller can iterate predictably.
+ *   TARGET ELIMINATED (correctVote = true, isTie = false):
+ *     Target player:          0
+ *     Voters who picked target (correct): +2
+ *     Voters who picked wrong target:      0
+ *
+ *   TARGET SURVIVED (tie OR wrong player eliminated):
+ *     Target player:          +3
+ *     Voters who picked target (correct but survived):  +1
+ *     Voters who picked wrong target:                   -1
+ *
+ *   CHAOS: everyone 0.
+ *
+ * Negative scores are allowed and written to the DB.
+ *
+ * @param {object} params
+ * @param {string}   params.roundType
+ * @param {object[]} params.roundPlayers   — [{ playerId, role }]
+ * @param {object}   params.tallyResult    — from votingService.tallyVotes()
+ * @param {Map}      params.votes          — voterId → targetId (for "correct voter" detection)
+ * @returns {object[]} [{ playerId, delta }]
  */
-function calculateDeltas({ roundType, roundPlayers, tallyResult }) {
-  // Chaos: no points for anyone
+function calculateDeltas({ roundType, roundPlayers, tallyResult, votes }) {
+  // Chaos: no points
   if (roundType === ROUND_TYPES.CHAOS) {
     return roundPlayers.map(p => ({ playerId: p.playerId, delta: 0 }));
   }
 
-  const { eliminatedPlayerId } = tallyResult;
+  const { eliminatedPlayerId, isTie } = tallyResult;
+
+  // Find the target player (imposter / spy / odd one)
+  const targetPlayer = roundPlayers.find(p => TARGET_ROLES.has(p.role));
+  const targetId     = targetPlayer ? targetPlayer.playerId : null;
+
+  // Determine whether the target was actually eliminated.
+  // A tie means eliminatedPlayerId === null, so targetEliminated is false.
+  const targetEliminated =
+    eliminatedPlayerId !== null &&
+    targetId !== null &&
+    eliminatedPlayerId === targetId;
+
   const deltas = [];
 
   for (const player of roundPlayers) {
-    const isTarget    = TARGET_ROLES.has(player.role);
-    const isEliminated = player.playerId === eliminatedPlayerId;
-
-    let delta = 0;
+    const isTarget = TARGET_ROLES.has(player.role);
 
     if (isTarget) {
-      // Target earns points for surviving
-      delta = isEliminated ? 0 : 2;
-    } else {
-      // Normal players earn points if the target was correctly eliminated
-      // Only award if the target was actually eliminated (not a no-vote or missed tie)
-      const targetWasEliminated =
-        eliminatedPlayerId !== null &&
-        roundPlayers.some(p => p.playerId === eliminatedPlayerId && TARGET_ROLES.has(p.role));
-
-      delta = targetWasEliminated ? 1 : 0;
+      // Target earns +3 for surviving, 0 if eliminated
+      deltas.push({
+        playerId: player.playerId,
+        delta:    targetEliminated ? 0 : 3,
+      });
+      continue;
     }
 
-    deltas.push({ playerId: player.playerId, delta });
+    // Non-target player — determine if they voted correctly
+    // "Correct vote" = voted for the target, regardless of outcome
+    const thisPlayerVote  = votes ? votes.get(player.playerId) : undefined;
+    const votedForTarget  = thisPlayerVote !== undefined && thisPlayerVote === targetId;
+
+    if (targetEliminated) {
+      // Target was caught: correct voters +2, wrong voters 0
+      deltas.push({
+        playerId: player.playerId,
+        delta:    votedForTarget ? 2 : 0,
+      });
+    } else {
+      // Target survived (tie or wrong elimination): correct voters +1, wrong voters -1
+      deltas.push({
+        playerId: player.playerId,
+        delta:    votedForTarget ? 1 : -1,
+      });
+    }
   }
 
   return deltas;
@@ -83,20 +94,20 @@ function calculateDeltas({ roundType, roundPlayers, tallyResult }) {
 
 /**
  * Applies score deltas to room_players.score in the DB.
- * Uses a single bulk UPDATE via CASE expression — one round-trip.
- * Only updates rows where delta > 0 to avoid unnecessary writes.
+ * Handles both positive and negative deltas.
+ * Skips players with delta === 0 to avoid unnecessary writes.
  *
  * @param {import('mysql2/promise').Pool} pool
- * @param {object[]} deltas   — [{ playerId, delta }]
+ * @param {object[]} deltas — [{ playerId, delta }]
  */
 async function applyDeltas(pool, deltas) {
-  const scoringDeltas = deltas.filter(d => d.delta > 0);
-  if (scoringDeltas.length === 0) return; // nothing to update
+  // Include negative deltas — previously this only wrote positives
+  const scoringDeltas = deltas.filter(d => d.delta !== 0);
+  if (scoringDeltas.length === 0) return;
 
-  // Build:  CASE WHEN id = 1 THEN score + 2 WHEN id = 2 THEN score + 1 ... END
-  const caseParts   = scoringDeltas.map(() => 'WHEN id = ? THEN score + ?').join(' ');
-  const caseValues  = scoringDeltas.flatMap(d => [d.playerId, d.delta]);
-  const playerIds   = scoringDeltas.map(d => d.playerId);
+  const caseParts    = scoringDeltas.map(() => 'WHEN id = ? THEN score + ?').join(' ');
+  const caseValues   = scoringDeltas.flatMap(d => [d.playerId, d.delta]);
+  const playerIds    = scoringDeltas.map(d => d.playerId);
   const placeholders = playerIds.map(() => '?').join(', ');
 
   await pool.query(
@@ -108,12 +119,11 @@ async function applyDeltas(pool, deltas) {
 }
 
 /**
- * Fetches updated scores for a list of player IDs.
- * Called after applyDeltas so the broadcast reflects the new totals.
+ * Fetches updated scores for a list of player IDs, sorted descending.
  *
  * @param {import('mysql2/promise').Pool} pool
  * @param {number[]} playerIds
- * @returns {Promise<object[]>}  [{ playerId, nickname, score }]
+ * @returns {Promise<object[]>} [{ playerId, nickname, score }]
  */
 async function fetchUpdatedScores(pool, playerIds) {
   if (playerIds.length === 0) return [];

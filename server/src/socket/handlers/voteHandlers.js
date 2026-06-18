@@ -284,18 +284,18 @@ async function startVotingPhase(io, pool, roomCode, state) {
   // Broadcast a countdown tick every second
   let secondsLeft = VOTE_DURATION_MS / 1000;
 
-  state.voteInterval = setInterval(() => {
+  state.tickInterval = setInterval(() => {
     secondsLeft--;
     io.to(roomCode).emit('vote:timer', { secondsRemaining: secondsLeft });
 
     if (secondsLeft <= 0) {
-      clearInterval(state.voteInterval);
+      clearInterval(state.tickInterval);
     }
   }, VOTE_TICK_MS);
 
   // 30-second hard deadline
   state.voteTimer = setTimeout(async () => {
-    clearInterval(state.voteInterval);
+    clearInterval(tickInterval);
     // Only resolve if still in voting (not already resolved by early completion)
     const currentState = getRoundState(roomCode);
     if (currentState && currentState.phase === 'voting') {
@@ -320,13 +320,19 @@ async function startVotingPhase(io, pool, roomCode, state) {
  */
 async function resolveVoting(io, pool, roomCode, state) {
   // Prevent double-resolution if timer fires just as the last vote arrives
-  if (state.phase === 'results') return;
-  state.phase = 'results';
-  clearTimeout(state.voteTimer);
+  if (state.phase === 'results') {
+    return;
+  }
 
-if (state.voteInterval) {
-  clearInterval(state.voteInterval);
-}
+  state.phase = 'results';
+
+  if (state.voteTimer) {
+    clearTimeout(state.voteTimer);
+  }
+
+  if (state.tickInterval) {
+    clearInterval(state.tickInterval);
+  }
 
   try {
     // ── Fetch round context from DB ──────────────────────────────────
@@ -385,6 +391,7 @@ if (state.voteInterval) {
       roundType:    round.round_type,
       roundPlayers: rpRows,
       tallyResult,
+      votes:        state.votes,   // needed to identify correct voters
     });
 
     await applyDeltas(pool, deltas);
@@ -469,12 +476,10 @@ if (state.voteInterval) {
       // the host a "Start Next Round" button and non-hosts a waiting message.
       // The host then emits round:start-next to actually begin the next round.
       // No automatic timer, no automatic round creation here.
-      setTimeout(() => {
-  io.to(roomCode).emit('round:next', {
-    nextRoundNumber: round.current_round + 1,
-    totalRounds:     round.total_rounds,
-  });
-}, 500);
+      io.to(roomCode).emit('round:next', {
+        nextRoundNumber: round.current_round + 1,
+        totalRounds:     round.total_rounds,
+      });
     }
 
   } catch (err) {

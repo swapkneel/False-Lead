@@ -129,10 +129,20 @@ export default function Voting() {
       setSecondsLeft(data.secondsRemaining);
     }
 
-    function onResult() {
-      setPhase('results');
-      navigate('/result');
-    }
+    function onResult(data) {
+  console.log(
+  'VOTING RECEIVED RESULT',
+  JSON.stringify(data, null, 2)
+);
+
+  sessionStorage.setItem(
+    'lastRoundResult',
+    JSON.stringify(data)
+  );
+
+  setPhase('results');
+  navigate('/result');
+}
 
     function onError(err) {
       setSocketError(err.message || 'Something went wrong.');

@@ -1,36 +1,15 @@
 // server/src/services/votingService.js
-// ─────────────────────────────────────────────────────────────────────────────
-//  Vote tallying and result determination.
-//
-//  Pure logic — no DB access, no socket calls.
-//  Receives the votes Map and the round_players array, returns a result object.
-//
-//  Responsibilities:
-//    - Count votes per target
-//    - Find the most-voted player
-//    - Detect and handle ties (random selection among tied players)
-//    - Return structured result for scoringService and socket broadcast
-// ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
 /**
- * Tallies votes and determines the eliminated player.
+ * Tallies votes and determines the result.
  *
- * @param {Map<number, number>} votes
- *   Map of voterId → targetId (from in-memory roundState)
+ * TIE RULE (fixed): when multiple players share the highest vote count,
+ * no player is eliminated. eliminatedPlayerId is null and isTie is true.
+ * The scoring service treats this as the target having survived.
  *
- * @param {object[]} roundPlayers
- *   Array of round_players rows:
- *   [{ playerId, nickname, role, receivedInfo }]
- *
- * @returns {object} result
- * {
- *   eliminatedPlayerId: number | null,   — null only if zero votes cast (edge case)
- *   eliminatedRole:     string | null,
- *   voteCounts:         { [playerId]: number },
- *   isTie:              boolean,
- *   tiedPlayerIds:      number[],        — populated when isTie is true
- * }
+ * Previously the code randomly picked one tied player as eliminated —
+ * that contradicted the spec and broke tie scoring.
  */
 function tallyVotes(votes, roundPlayers) {
   // Build a count map: { playerId → voteCount }
@@ -44,10 +23,9 @@ function tallyVotes(votes, roundPlayers) {
     }
   }
 
-  // Find the maximum vote count
   const maxVotes = Math.max(...Object.values(voteCounts));
 
-  // Edge case: no votes cast at all (every player skipped / disconnected)
+  // Edge case: no votes cast at all
   if (maxVotes === 0) {
     return {
       eliminatedPlayerId: null,
@@ -58,32 +36,39 @@ function tallyVotes(votes, roundPlayers) {
     };
   }
 
-  // Collect all players tied at the max
+  // All players tied at the max
   const tiedIds = Object.entries(voteCounts)
     .filter(([, count]) => count === maxVotes)
     .map(([id]) => Number(id));
 
-  const isTie           = tiedIds.length > 1;
-  const eliminatedId    = tiedIds[Math.floor(Math.random() * tiedIds.length)];
+  const isTie = tiedIds.length > 1;
+
+  if (isTie) {
+    // Tie = no elimination. Target survives. Scoring uses the survived path.
+    return {
+      eliminatedPlayerId: null,
+      eliminatedRole:     null,
+      voteCounts,
+      isTie:              true,
+      tiedPlayerIds:      tiedIds,
+    };
+  }
+
+  // Clear winner — one player eliminated
+  const eliminatedId     = tiedIds[0];
   const eliminatedPlayer = roundPlayers.find(p => p.playerId === eliminatedId);
 
   return {
     eliminatedPlayerId: eliminatedId,
     eliminatedRole:     eliminatedPlayer ? eliminatedPlayer.role : null,
     voteCounts,
-    isTie,
-    tiedPlayerIds:      isTie ? tiedIds : [],
+    isTie:              false,
+    tiedPlayerIds:      [],
   };
 }
 
 /**
  * Builds the full vote breakdown for the result broadcast.
- * Maps each voter to their target with nicknames for the frontend.
- *
- * @param {Map<number, number>} votes          — voterId → targetId
- * @param {object[]}            roundPlayers   — [{ playerId, nickname }]
- * @returns {object[]}
- * [{ voterNickname, targetNickname }]
  */
 function buildVoteBreakdown(votes, roundPlayers) {
   const nicknameMap = {};

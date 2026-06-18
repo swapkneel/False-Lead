@@ -32,6 +32,19 @@ const socket = io(SOCKET_URL, {
 if (import.meta.env.DEV) {
   socket.onAny((event, ...args) => {
     console.log(`[socket ←] ${event}`, args);
+     
+    if (event === 'round:next') {
+    sessionStorage.setItem(
+      'nextRoundInfo',
+      JSON.stringify(args[0])
+    );
+  }
+    if (event === 'game:finished') {
+  sessionStorage.setItem(
+    'gameFinished',
+    'true'
+  );
+}
   });
 
   socket.on('connect',    () => console.log('[socket] connected', socket.id));
