@@ -198,13 +198,13 @@ function assignChaos(players, wordEntry) {
     }
   }
 
-  return playerGroups.map(({ player, groupIndex }) => ({
-    playerId:     player.id,
-    dbRole:       'imposter',           // all chaos players are impostors internally
-    socketRole:   'normal',             // everyone appears normal to themselves
-    receivedInfo: groups[groupIndex],   // their group's real word
-    clueOrder:    clueOrder[player.id],
-  }));
+  return shuffled.map((player, index) => ({
+  playerId:     player.id,
+  dbRole:       'imposter',
+  socketRole:   'normal',
+  receivedInfo: groups[index],
+  clueOrder:    clueOrder[player.id],
+}));
 }
 
 // ─────────────────────────────────────────────

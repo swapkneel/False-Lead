@@ -46,7 +46,7 @@ function selectRoundType({ settings, currentRound, totalRounds, usedRoundTypes }
     special.chaos === true &&
     !chaosAlreadyUsed &&
     notFirstOrLast &&
-    Math.random() < 0.125   // 1-in-8
+    Math.random() < 0.15   // 1-in-8
   ) {
     return ROUND_TYPES.CHAOS;
   }

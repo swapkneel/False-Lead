@@ -158,9 +158,47 @@ async function selectWordWithAlternate(pool, category) {
   throw new Error('NO_ALTERNATE_WORDS');
 }
 
+/**
+ * Selects 2-3 distinct words from the same category for Chaos mode.
+ *
+ * Returns:
+ * [
+ *   "Pizza",
+ *   "Burger"
+ * ]
+ *
+ * or
+ *
+ * [
+ *   "Pizza",
+ *   "Burger",
+ *   "Pasta"
+ * ]
+ */
+async function selectWordsForChaos(pool, category, playerCount) {
+  const [rows] = await pool.query(
+    `SELECT word
+     FROM word_bank
+     WHERE category = ?
+     AND is_active = 1
+     ORDER BY RAND()
+     LIMIT ?`,
+    [category, playerCount]
+  );
+
+  if (rows.length < playerCount) {
+    throw new Error(
+      `[wordService] Chaos requires at least ${playerCount} words in category "${category}"`
+    );
+  }
+
+  return rows.map(r => r.word);
+}
+
 module.exports = {
   resolveCategory,
   getRandomCategory,
   selectWord,
   selectWordWithAlternate,
+  selectWordsForChaos,
 };

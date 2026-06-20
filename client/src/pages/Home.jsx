@@ -32,6 +32,13 @@ export default function Home() {
   const [roomCode, setRoomCode]   = useState('');
   const [loading,  setLoading]    = useState(false);
   const [error,    setError]      = useState('');
+  const [specialRounds, setSpecialRounds] = useState({
+  reverse_spy: true,
+  similar_word: true,
+  chaos: true,
+});
+
+const [totalRounds, setTotalRounds] = useState(3);
 
   // Clear error whenever the player switches tabs or types
   function clearError() { setError(''); }
@@ -49,7 +56,15 @@ export default function Home() {
       // Generate host session token client-side
       const hostSessionId = crypto.randomUUID();
 
-      const { roomCode: newCode } = await createRoom({ hostSessionId });
+      const { roomCode: newCode } = await createRoom({
+  hostSessionId,
+
+  totalRounds,
+
+  settings: {
+    special_rounds: specialRounds,
+  },
+});
 
       // Immediately join the room so the host has a room_players row
       const { playerId, sessionToken } = await joinRoom({
@@ -146,18 +161,78 @@ export default function Home() {
               Your nickname
             </label>
             <input
-              id="create-nickname"
-              className="field-input"
-              type="text"
-              placeholder="e.g. Swapnil"
-              maxLength={20}
-              value={nickname}
-              onChange={(e) => { setNickname(e.target.value); clearError(); }}
-              autoComplete="off"
-              autoFocus
-            />
+  id="create-nickname"
+  className="field-input"
+  type="text"
+  placeholder="e.g. Swapnil"
+  maxLength={20}
+  value={nickname}
+  onChange={(e) => { setNickname(e.target.value); clearError(); }}
+  autoComplete="off"
+  autoFocus
+/>
 
-            {error && <p className="form-error" role="alert">{error}</p>}
+<div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+  <p><strong>Number of Rounds</strong></p>
+
+  <select
+    value={totalRounds}
+    onChange={(e) => setTotalRounds(Number(e.target.value))}
+  >
+    <option value={3}>3 Rounds</option>
+    <option value={5}>5 Rounds</option>
+    <option value={7}>7 Rounds</option>
+    <option value={10}>10 Rounds</option>
+  </select>
+</div>
+
+<div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
+  <p><strong>Special Rounds</strong></p>
+
+  <label style={{ display: 'block' }}>
+    <input
+      type="checkbox"
+      checked={specialRounds.reverse_spy}
+      onChange={() =>
+        setSpecialRounds(prev => ({
+          ...prev,
+          reverse_spy: !prev.reverse_spy,
+        }))
+      }
+    />
+    {' '}Reverse Spy
+  </label>
+
+  <label style={{ display: 'block' }}>
+    <input
+      type="checkbox"
+      checked={specialRounds.similar_word}
+      onChange={() =>
+        setSpecialRounds(prev => ({
+          ...prev,
+          similar_word: !prev.similar_word,
+        }))
+      }
+    />
+    {' '}Similar Word
+  </label>
+
+  <label style={{ display: 'block' }}>
+    <input
+      type="checkbox"
+      checked={specialRounds.chaos}
+      onChange={() =>
+        setSpecialRounds(prev => ({
+          ...prev,
+          chaos: !prev.chaos,
+        }))
+      }
+    />
+    {' '}Chaos
+  </label>
+</div>
+
+{error && <p className="form-error" role="alert">{error}</p>}
 
             <button
               className="btn btn--primary btn--full"

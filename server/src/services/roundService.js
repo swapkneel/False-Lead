@@ -94,7 +94,11 @@ async function createRound(pool, {
     // which distributes players across groups.
     // The sentinel 'CHAOS' is stored in rounds.word so results can
     // identify chaos rounds without exposing the group words in the record.
-    const chaosGroups = await selectWordsForChaos(pool, category);
+    const chaosGroups = await selectWordsForChaos(
+  pool,
+  category,
+  players.length
+);
     wordEntry = {
       word:          'CHAOS',   // sentinel — never shown to players
       hint:          'CHAOS',

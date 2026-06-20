@@ -295,7 +295,7 @@ async function startVotingPhase(io, pool, roomCode, state) {
 
   // 30-second hard deadline
   state.voteTimer = setTimeout(async () => {
-    clearInterval(tickInterval);
+    clearInterval(state.tickInterval);;
     // Only resolve if still in voting (not already resolved by early completion)
     const currentState = getRoundState(roomCode);
     if (currentState && currentState.phase === 'voting') {

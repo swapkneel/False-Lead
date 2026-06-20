@@ -82,9 +82,9 @@ function CaseFileHeader({ roundNumber, totalRounds, category }) {
         <span className="cf-round-num">{String(roundNumber).padStart(2,'0')} / {String(totalRounds).padStart(2,'0')}</span>
       </div>
       <div className="cf-category-row">
-        <span className="cf-category-icon" aria-hidden="true">📁</span>
-        <span className="cf-category">{category}</span>
-      </div>
+  <span className="cf-category-icon" aria-hidden="true">📁</span>
+  <span className="cf-category">CLASSIFIED</span>
+</div>
     </div>
   );
 }
