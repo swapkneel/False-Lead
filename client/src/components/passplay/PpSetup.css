@@ -1,0 +1,272 @@
+/* ═══════════════════════════════════════════
+   PpSetup.css — Pass & Play Setup Styles
+   Scoped under .pp-setup / .pp-* to avoid
+   collisions with existing online styles.
+═══════════════════════════════════════════ */
+
+/* ── Page wrapper ── */
+.passplay-page {
+  min-height: 100vh;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 2rem 1rem 4rem;
+  box-sizing: border-box;
+}
+
+/* ── Setup card ── */
+.pp-setup {
+  width: 100%;
+  max-width: 560px;
+}
+
+/* ── Header ── */
+.pp-setup__header {
+  text-align: center;
+  margin-bottom: 2rem;
+}
+
+.pp-setup__title {
+  font-size: 2rem;
+  font-weight: 700;
+  margin: 0 0 0.25rem;
+}
+
+.pp-setup__subtitle {
+  font-size: 0.95rem;
+  opacity: 0.6;
+  margin: 0;
+}
+
+/* ── Body ── */
+.pp-setup__body {
+  display: flex;
+  flex-direction: column;
+  gap: 1.75rem;
+}
+
+/* ── Section ── */
+.pp-setup__section {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  padding: 1.25rem 1.5rem;
+}
+
+.pp-setup__section-title {
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  opacity: 0.5;
+  margin: 0 0 1rem;
+}
+
+/* ── Error messages ── */
+.pp-setup__error {
+  color: #f87171;
+  font-size: 0.8rem;
+  margin: 0.5rem 0 0;
+}
+
+.pp-setup__field-error {
+  color: #f87171;
+  font-size: 0.75rem;
+  margin: 0.25rem 0 0;
+}
+
+/* ── Stepper ── */
+.pp-setup__stepper {
+  display: flex;
+  align-items: center;
+  gap: 1.25rem;
+}
+
+.pp-stepper__btn {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.06);
+  color: inherit;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, opacity 0.15s;
+}
+
+.pp-stepper__btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+}
+
+.pp-stepper__btn:disabled {
+  opacity: 0.3;
+  cursor: not-allowed;
+}
+
+.pp-stepper__value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  min-width: 2.5rem;
+  text-align: center;
+}
+
+/* ── Names grid ── */
+.pp-setup__names-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.75rem;
+}
+
+@media (max-width: 420px) {
+  .pp-setup__names-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.pp-setup__name-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.pp-setup__name-label {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  opacity: 0.45;
+}
+
+.pp-setup__name-input {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.95rem;
+  color: inherit;
+  outline: none;
+  transition: border-color 0.15s;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.pp-setup__name-input::placeholder {
+  opacity: 0.3;
+}
+
+.pp-setup__name-input:focus {
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.pp-setup__name-input--error {
+  border-color: #f87171 !important;
+}
+
+/* ── Toggles ── */
+.pp-setup__toggles {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.pp-toggle-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.65rem 0;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.pp-toggle-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.pp-toggle-row:first-child {
+  padding-top: 0;
+}
+
+.pp-toggle-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.pp-toggle-row__label {
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+
+.pp-toggle-row__desc {
+  font-size: 0.75rem;
+  opacity: 0.45;
+  line-height: 1.4;
+}
+
+/* ── Toggle switch ── */
+.pp-toggle {
+  position: relative;
+  width: 44px;
+  height: 26px;
+  border-radius: 999px;
+  border: none;
+  background: rgba(255, 255, 255, 0.12);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: background 0.2s;
+  padding: 0;
+}
+
+.pp-toggle--on {
+  background: #6366f1; /* indigo accent — change to match your palette */
+}
+
+.pp-toggle__thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.2s;
+  pointer-events: none;
+}
+
+.pp-toggle--on .pp-toggle__thumb {
+  transform: translateX(18px);
+}
+
+/* ── Actions ── */
+.pp-setup__actions {
+  display: flex;
+  justify-content: center;
+}
+
+.pp-setup__start-btn {
+  width: 100%;
+  max-width: 320px;
+  padding: 0.85rem 2rem;
+  border-radius: 10px;
+  border: none;
+  background: #6366f1;
+  color: #fff;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, transform 0.1s;
+  letter-spacing: 0.02em;
+}
+
+.pp-setup__start-btn:hover {
+  background: #4f52d4;
+}
+
+.pp-setup__start-btn:active {
+  transform: scale(0.98);
+}

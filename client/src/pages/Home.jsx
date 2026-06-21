@@ -144,6 +144,15 @@ const [totalRounds, setTotalRounds] = useState(3);
           >
             Create Room
           </button>
+
+          <button
+  type="button"
+  className="btn btn--ghost btn--full"
+  style={{ marginTop: '0.75rem' }}
+  onClick={() => navigate('/pass-and-play')}
+>
+  Pass & Play
+</button>
           <button
             role="tab"
             aria-selected={activeTab === TAB_JOIN}
