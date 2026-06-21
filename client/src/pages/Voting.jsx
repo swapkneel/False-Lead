@@ -200,6 +200,7 @@ export default function Voting() {
       )}
 
       {/* Suspect grid */}
+     
       <div className="suspect-grid">
         {players.map(player => (
           <SuspectCard

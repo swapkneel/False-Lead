@@ -215,6 +215,8 @@ export default function Result() {
   const [isGameOver, setIsGameOver] = useState(
   sessionStorage.getItem('gameFinished') === 'true'
 );
+
+  
   const [starting,    setStarting]  = useState(false);
   const [socketError, setSocketError] = useState('');
   const roundCreatedRef = useRef(false);
@@ -227,7 +229,8 @@ export default function Result() {
     if (!sessionToken) return;
 
     function onRoundResult(data) {
-  console.log('ROUND RESULT RECEIVED', data);
+      sessionStorage.removeItem('gameFinished');
+  
 
   sessionStorage.setItem(
     'lastRoundResult',
@@ -266,6 +269,8 @@ export default function Result() {
    function onGameFinished(data) {
   console.log('GAME FINISHED RECEIVED', data);
 
+  sessionStorage.setItem('gameFinished', 'true');
+
   if (data?.finalScores) {
     setResult(prev => prev ? { ...prev, scores: data.finalScores } : prev);
   }
@@ -279,7 +284,6 @@ export default function Result() {
       setSocketError(err.message || 'Something went wrong.');
     }
 
-    console.log('RESULT SOCKET EFFECT MOUNTED');
 
     socket.on('round:result',  onRoundResult);
     socket.on('round:next',    onRoundNext);
@@ -288,21 +292,11 @@ export default function Result() {
     socket.on('game:finished', onGameFinished);
     socket.on('error',         onError);
 
-    console.log('RESULT RENDER', {
-  nextRound,
-  isHost,
-  isGameOver
-});
 
-console.log('RESULT PAGE STATE', {
-  nextRound,
-  isHost,
-  starting,
-  hasResult: !!result
-});
+
+
 
     return () => {
-      console.log('RESULT SOCKET EFFECT CLEANUP');
       socket.off('round:result',  onRoundResult);
       socket.off('round:next',    onRoundNext);
       socket.off('round:created', onRoundCreated);
@@ -338,19 +332,17 @@ console.log('RESULT PAGE STATE', {
   );
 }
 
-  const { roundType, word, alternateWord, eliminatedPlayer, targetPlayer,
+ const { roundType, word, alternateWord, eliminatedPlayer, targetPlayer,
           correctVote, isTie, voteBreakdown, scoreDeltas, scores } = result;
+
+
+ 
 
   // Derive roundNumber: nextRound.nextRoundNumber is the NEXT round, so current = next - 1
   const roundNumber = nextRound ? nextRound.nextRoundNumber - 1 : null;
   const totalRounds = nextRound ? nextRound.totalRounds : null;
 
-  console.log('FINAL STATE', {
-  isGameOver,
-  nextRound,
-  isHost,
-  hasResult: !!result
-});
+  
   return (
     <div className="rs-page">
 
@@ -375,20 +367,22 @@ console.log('RESULT PAGE STATE', {
 
       <div className="rs-next-wrapper">
         {isGameOver ? (
-          <div className="rs-game-over">
-            <p className="rs-game-over__title">Game Over</p>
-            <button
-  className="btn btn--ghost btn--full"
-  onClick={() => {
-    sessionStorage.removeItem('gameFinished');
-    sessionStorage.removeItem('nextRoundInfo');
-    navigate('/');
-  }}
->
-              Back to Home
-            </button>
-          </div>
-        ) : nextRound && isHost ? (
+  <div className="rs-game-over">
+    <p className="rs-game-over__title">Game Over</p>
+
+    <button
+      className="btn btn--ghost btn--full"
+      onClick={() => {
+        sessionStorage.removeItem('gameFinished');
+        sessionStorage.removeItem('nextRoundInfo');
+        navigate('/');
+      }}
+    >
+      Back to Home
+    </button>
+  </div>
+)
+        : nextRound && isHost ? (
           <button
             className="btn btn--primary btn--full rs-next-btn"
             onClick={handleStartNext}
