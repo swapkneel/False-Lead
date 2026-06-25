@@ -1,0 +1,222 @@
+/* ═══════════════════════════════════════════
+   PpRoleReveal.css
+   All selectors scoped under .pp-reveal / .pp-role-card
+═══════════════════════════════════════════ */
+
+.pp-reveal {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.25rem;
+  box-sizing: border-box;
+  position: relative;
+}
+
+/* Progress pill */
+.pp-reveal__progress {
+  position: absolute;
+  top: 1.25rem;
+  right: 1.25rem;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0.3rem 0.85rem;
+}
+.pp-reveal__progress-text {
+  font-size: 0.75rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+}
+
+/* ── Pass Screen ── */
+.pp-reveal__pass-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.75rem;
+  max-width: 380px;
+  width: 100%;
+}
+
+.pp-reveal__device-icon {
+  font-size: 3rem;
+  margin-bottom: 0.5rem;
+  animation: pp-bob 2.4s ease-in-out infinite;
+}
+
+@keyframes pp-bob {
+  0%, 100% { transform: translateY(0); }
+  50%       { transform: translateY(-6px); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pp-reveal__device-icon { animation: none; }
+}
+
+.pp-reveal__instruction {
+  font-size: 0.9rem;
+  opacity: 0.5;
+  margin: 0;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 600;
+}
+
+.pp-reveal__player-name {
+  font-size: 2.4rem;
+  font-weight: 800;
+  margin: 0.1rem 0 0.25rem;
+  letter-spacing: -0.02em;
+}
+
+.pp-reveal__sub {
+  font-size: 0.8rem;
+  opacity: 0.4;
+  margin: 0 0 1.5rem;
+}
+
+.pp-reveal__cta-btn {
+  background: #6366f1;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 0.9rem 2.5rem;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  letter-spacing: 0.02em;
+  transition: background 0.15s, transform 0.1s;
+  width: 100%;
+  max-width: 280px;
+}
+.pp-reveal__cta-btn:hover  { background: #4f52d4; }
+.pp-reveal__cta-btn:active { transform: scale(0.97); }
+
+/* ── Reveal Screen ── */
+.pp-reveal__reveal-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 1.25rem;
+  max-width: 380px;
+  width: 100%;
+}
+
+.pp-reveal__for-name {
+  font-size: 0.85rem;
+  opacity: 0.5;
+  margin: 0;
+  letter-spacing: 0.03em;
+}
+.pp-reveal__for-name strong { opacity: 1; color: inherit; }
+
+/* ── Role Card ── */
+.pp-role-card {
+  width: 100%;
+  border-radius: 20px;
+  padding: 2rem 1.75rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1.5rem;
+  box-sizing: border-box;
+  opacity: 0;
+  transform: scale(0.94) translateY(8px);
+  transition: opacity 0.3s ease, transform 0.3s ease;
+}
+.pp-role-card--visible {
+  opacity: 1;
+  transform: scale(1) translateY(0);
+}
+
+.pp-role-card--normal {
+  background: linear-gradient(145deg, #1e2040 0%, #23264a 100%);
+  border: 1px solid rgba(99, 102, 241, 0.35);
+  box-shadow: 0 0 40px rgba(99, 102, 241, 0.12);
+}
+
+.pp-role-card--imposter {
+  background: linear-gradient(145deg, #3a1a1a 0%, #421e1e 100%);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  box-shadow: 0 0 40px rgba(239, 68, 68, 0.15);
+}
+
+.pp-role-card__badge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.35rem;
+}
+.pp-role-card__badge-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  opacity: 0.45;
+  text-transform: uppercase;
+}
+.pp-role-card__badge-value {
+  font-size: 1.9rem;
+  font-weight: 800;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+.pp-role-card--normal   .pp-role-card__badge-value { color: #a5b4fc; }
+.pp-role-card--imposter .pp-role-card__badge-value { color: #fca5a5; }
+
+.pp-role-card__word-section,
+.pp-role-card__no-word {
+  width: 100%;
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  padding-top: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+}
+.pp-role-card__word-label {
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  opacity: 0.4;
+  text-transform: uppercase;
+}
+.pp-role-card__word {
+  font-size: 2.2rem;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+}
+.pp-role-card__modifier-note {
+  font-size: 0.72rem;
+  opacity: 0.5;
+  margin-top: 0.25rem;
+}
+.pp-role-card__no-word-text {
+  font-size: 0.9rem;
+  opacity: 0.55;
+  line-height: 1.5;
+}
+
+/* Hide / advance button */
+.pp-reveal__hide-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  color: inherit;
+  padding: 0.7rem 1.75rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+  width: 100%;
+  max-width: 280px;
+}
+.pp-reveal__hide-btn:hover {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.35);
+}

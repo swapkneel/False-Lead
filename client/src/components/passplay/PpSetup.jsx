@@ -150,7 +150,7 @@ const PpSetup = () => {
 
     console.log("[Pass & Play] Game config:", config);
 
-    navigate("/pass-and-play/game", { state: { config } });
+    navigate("/pass-and-play/roles", { state: { config } });
   };
 
   /* ── Render ── */

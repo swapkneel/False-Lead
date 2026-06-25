@@ -1,0 +1,147 @@
+/* ═══════════════════════════════════════════
+   PpDiscussion.css — scoped under .pp-discussion
+═══════════════════════════════════════════ */
+
+.pp-discussion {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 2rem 1.25rem 3rem;
+  box-sizing: border-box;
+  text-align: center;
+  gap: 1.75rem;
+  max-width: 480px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.pp-discussion--empty {
+  gap: 1rem;
+  opacity: 0.6;
+}
+
+/* ── Header ── */
+.pp-discussion__header {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.6rem;
+}
+
+.pp-discussion__tick {
+  width: 56px;
+  height: 56px;
+  border-radius: 50%;
+  background: rgba(99, 241, 145, 0.12);
+  border: 1px solid rgba(99, 241, 145, 0.3);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.5rem;
+  color: #6ee7b7;
+}
+
+.pp-discussion__title {
+  font-size: 1.75rem;
+  font-weight: 800;
+  margin: 0;
+  letter-spacing: -0.02em;
+}
+
+.pp-discussion__subtitle {
+  font-size: 0.9rem;
+  opacity: 0.5;
+  margin: 0;
+  max-width: 300px;
+  line-height: 1.5;
+}
+
+/* ── Round badge ── */
+.pp-discussion__round-badge {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0.35rem 1rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  opacity: 0.7;
+}
+
+/* ── Player roster ── */
+.pp-discussion__players {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  justify-content: center;
+  width: 100%;
+}
+
+.pp-discussion__player-chip {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  padding: 0.4rem 0.9rem 0.4rem 0.5rem;
+}
+
+.pp-discussion__player-initial {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: #6366f1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.pp-discussion__player-name {
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+
+/* ── Actions ── */
+.pp-discussion__actions {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.75rem;
+  width: 100%;
+}
+
+.pp-discussion__vote-btn {
+  background: #6366f1;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 0.9rem 2rem;
+  font-size: 1rem;
+  font-weight: 700;
+  cursor: pointer;
+  width: 100%;
+  max-width: 300px;
+  transition: background 0.15s, transform 0.1s;
+  letter-spacing: 0.02em;
+}
+.pp-discussion__vote-btn:hover  { background: #4f52d4; }
+.pp-discussion__vote-btn:active { transform: scale(0.98); }
+
+.pp-discussion__back-btn {
+  background: transparent;
+  border: none;
+  color: inherit;
+  font-size: 0.82rem;
+  opacity: 0.4;
+  cursor: pointer;
+  padding: 0.4rem;
+  transition: opacity 0.15s;
+}
+.pp-discussion__back-btn:hover { opacity: 0.7; }

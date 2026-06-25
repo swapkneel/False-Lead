@@ -111,8 +111,8 @@ export default function Lobby() {
   // ── Host: start game ─────────────────────────────────────────────────────
   function handleStartGame() {
     if (!isHost) return;
-    if (players.length < 2) {
-      setSocketError('Need at least 2 players to start.');
+    if (players.length < 3) {
+      setSocketError('Need at least 3 players to start.');
       return;
     }
     setSocketError('');
@@ -154,14 +154,14 @@ export default function Lobby() {
           {isHost ? (
             <>
               <p className="lobby-host-hint">
-                {players.length < 2
-                  ? 'Waiting for at least one more player…'
-                  : 'Everyone ready? Start the game.'}
+                {players.length < 3
+                ? 'Waiting for at least 3 players…'
+                : 'Everyone ready? Start the game.'}
               </p>
               <button
                 className="btn btn--primary btn--full"
                 onClick={handleStartGame}
-                disabled={starting || players.length < 2}
+                disabled={starting || players.length < 3}
               >
                 {starting ? 'Starting…' : 'Start Game'}
               </button>

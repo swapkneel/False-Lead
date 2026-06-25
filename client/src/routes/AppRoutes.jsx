@@ -7,6 +7,8 @@ import Voting  from '../pages/Voting';
 import Result  from '../pages/Result';
 import PassPlay from "../pages/PassPlay";
 import PpPlaceholder from "../pages/PpPlaceholder";
+import PpRoleReveal from "../components/passplay/PpRoleReveal";
+import PpDiscussion from "../components/passplay/PpDiscussion";
 
 export default function AppRoutes() {
   return (
@@ -18,6 +20,8 @@ export default function AppRoutes() {
       <Route path="/result"         element={<Result />} />
       <Route path="/pass-and-play"  element={<PassPlay />} />
       <Route path="/pass-and-play/game" element={<PpPlaceholder />} />
+      <Route path="/pass-and-play/roles" element={<PpRoleReveal />} />
+<Route path="/pass-and-play/discussion" element={<PpDiscussion />} />
       <Route path="*"               element={<Navigate to="/" replace />} />
     </Routes>
   );

@@ -191,12 +191,12 @@ function registerLobbyHandlers(socket, io, pool) {
 
       const players = await getConnectedPlayers(pool, socket.data.roomId);
 
-      if (players.length < 2) {
-        return socket.emit('error', {
-          code:    'NOT_ENOUGH_PLAYERS',
-          message: 'At least 2 players are needed to start.',
-        });
-      }
+      if (players.length < 3) {
+  return socket.emit('error', {
+    code: 'NOT_ENOUGH_PLAYERS',
+    message: 'At least 3 players are required to start the game.',
+  });
+}
 
       const settings = typeof room.settingsJson === 'string'
         ? JSON.parse(room.settingsJson)

@@ -130,9 +130,13 @@ function assignReverseSpy(players, wordEntry) {
  * @param {object}   wordEntry   — must have both word and alternate_word
  * @returns {object[]}
  */
-function assignSimilarWord(players, wordEntry) {
+function assignSimilarWord(players, wordEntry, similarCount) {
   const shuffled    = shuffle([...players]);
-  const oddPlayerId = shuffled[0].id;
+  const differentPlayers = new Set(
+  shuffled
+    .slice(0, similarCount)
+    .map(p => p.id)
+);
   const clueOrder   = buildClueOrder(players);
 
   // DESIGN: The odd player must believe they are normal.
@@ -140,7 +144,7 @@ function assignSimilarWord(players, wordEntry) {
   // but emit 'normal' as the socketRole so their UI is identical
   // to every other player. Only their word differs.
   return players.map((p) => {
-    const isOdd = p.id === oddPlayerId;
+    const isOdd = differentPlayers.has(p.id);
     return {
       playerId:     p.id,
       dbRole:       isOdd ? 'similar_word_target' : 'normal',   // persisted to round_players
@@ -246,6 +250,7 @@ function buildAssignments({ players, roundType, wordEntry, settings }) {
     settings.imposter_count,
     players.length
   );
+  const similarCount = imposterCount;
 
   // assignNormal and assignReverseSpy return { role } directly.
   // assignSimilarWord and assignChaos return { dbRole, socketRole } to
@@ -261,8 +266,12 @@ function buildAssignments({ players, roundType, wordEntry, settings }) {
       rawAssignments = assignReverseSpy(players, wordEntry);
       break;
     case ROUND_TYPES.SIMILAR_WORD:
-      rawAssignments = assignSimilarWord(players, wordEntry);
-      break;
+    rawAssignments = assignSimilarWord(
+        players,
+        wordEntry,
+        similarCount
+    );
+    break;
     case ROUND_TYPES.CHAOS:
       rawAssignments = assignChaos(players, wordEntry);
       break;
