@@ -1,6 +1,5 @@
 // client/src/pages/Result.jsx
 'use strict';
-// Full results screen — see inline comments for detail
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate }                               from 'react-router-dom';
@@ -32,17 +31,32 @@ function RoundStamp({ roundType, roundNumber, totalRounds }) {
   );
 }
 
-function VerdictPanel({ eliminatedPlayer, targetPlayer, correctVote, isTie }) {
-  if (isTie) {
+// VerdictPanel — multi-elimination aware.
+//
+// Rules:
+//   eliminatedPlayers.length > 0  → show each eliminated player, then tie notice if partial
+//   eliminatedPlayers.length === 0 && isTie  → full tie, nobody eliminated
+//   eliminatedPlayers.length === 0 && !isTie → no votes cast
+//
+// "isTie" means one or more later slots were blocked. It does NOT mean nobody
+// was eliminated — partial eliminations (some slots filled, later slot tied)
+// are valid. The tie banner is shown as a sub-note below confirmed eliminations.
+function VerdictPanel({ eliminatedPlayers = [], targetPlayers = [], correctVote, isTie }) {
+  const hasEliminations = eliminatedPlayers.length > 0;
+
+  // Full tie: nobody eliminated at all
+  if (!hasEliminations && isTie) {
     return (
       <div className="rs-verdict rs-verdict--tie">
         <div className="rs-verdict__title">VOTE RESULT</div>
         <div className="rs-verdict__tie-label">TIE</div>
-        <p className="rs-verdict__sub">No player eliminated. The target survives.</p>
+        <p className="rs-verdict__sub">No player eliminated. The targets survive.</p>
       </div>
     );
   }
-  if (!eliminatedPlayer) {
+
+  // No votes cast
+  if (!hasEliminations) {
     return (
       <div className="rs-verdict rs-verdict--nobody">
         <div className="rs-verdict__title">VOTE RESULT</div>
@@ -50,27 +64,50 @@ function VerdictPanel({ eliminatedPlayer, targetPlayer, correctVote, isTie }) {
       </div>
     );
   }
+
+  // One or more players eliminated
+  // correctVote = true if at least one eliminated player was a target role
+  const survivingTargets = targetPlayers.filter(
+    t => !eliminatedPlayers.some(e => e.id === t.id)
+  );
+
   return (
     <div className={`rs-verdict ${correctVote ? 'rs-verdict--correct' : 'rs-verdict--wrong'}`}>
       <div className="rs-verdict__title">ELIMINATED</div>
-      <div className="rs-verdict__name">{eliminatedPlayer.nickname}</div>
-      {correctVote ? (
-        <div className="rs-verdict__outcome rs-verdict__outcome--correct">
-          <span>✓</span>
-          <span>{eliminatedPlayer.nickname} was the {ROLE_LABELS[eliminatedPlayer.role] || 'Target'}</span>
-        </div>
-      ) : (
-        <>
-          <div className="rs-verdict__outcome rs-verdict__outcome--wrong">
-            <span>✗</span>
-            <span>{eliminatedPlayer.nickname} was NOT the Target</span>
+
+      {eliminatedPlayers.map((ep) => {
+        const wasTarget = ['imposter', 'reverse_spy_target', 'similar_word_target'].includes(ep.role);
+        return (
+          <div key={ep.id} className="rs-verdict__entry">
+            <div className="rs-verdict__name">{ep.nickname}</div>
+            {wasTarget ? (
+              <div className="rs-verdict__outcome rs-verdict__outcome--correct">
+                <span>✓</span>
+                <span>{ep.nickname} was the {ROLE_LABELS[ep.role] || 'Target'}</span>
+              </div>
+            ) : (
+              <div className="rs-verdict__outcome rs-verdict__outcome--wrong">
+                <span>✗</span>
+                <span>{ep.nickname} was NOT a Target</span>
+              </div>
+            )}
           </div>
-          {targetPlayer && (
-            <p className="rs-verdict__real">
-              The actual {ROLE_LABELS[targetPlayer.role] || 'target'} was <strong>{targetPlayer.nickname}</strong>
-            </p>
-          )}
-        </>
+        );
+      })}
+
+      {/* Show surviving targets when at least one wrong elimination happened */}
+      {!correctVote && survivingTargets.length > 0 && (
+        <p className="rs-verdict__real">
+          The actual {survivingTargets.length === 1 ? 'target' : 'targets'}:{' '}
+          <strong>{survivingTargets.map(t => t.nickname).join(', ')}</strong>
+        </p>
+      )}
+
+      {/* Partial tie notice: some slots were filled but later slots were blocked */}
+      {isTie && (
+        <p className="rs-verdict__sub rs-verdict__sub--tie">
+          Further eliminations were tied.
+        </p>
       )}
     </div>
   );
@@ -139,19 +176,74 @@ function WordReveal({ roundType, word, alternateWord }) {
   return null;
 }
 
+/**
+ * VoteTally — new panel above VoteBreakdown.
+ * Shows every player's vote count sorted descending so players can
+ * immediately see the outcome without manually counting.
+ * voteCounts is the { [playerId]: count } object already in the result payload.
+ * scores is the updated scores array — used to look up nicknames by playerId.
+ */
+function VoteTally({ voteCounts = {}, scores = [] }) {
+  if (!Object.keys(voteCounts).length) return null;
+
+  // Build nickname lookup from scores array (already contains all players)
+  const nicknameMap = {};
+  for (const p of scores) {
+    nicknameMap[p.playerId] = p.nickname;
+  }
+
+  // Sort descending by vote count
+  const rows = Object.entries(voteCounts)
+    .map(([id, count]) => ({ playerId: Number(id), count }))
+    .sort((a, b) => b.count - a.count);
+
+  return (
+    <div className="rs-panel">
+      <div className="rs-panel__header">VOTE TALLY</div>
+      <ul className="rs-tally-list">
+        {rows.map(({ playerId, count }) => (
+          <li key={playerId} className="rs-tally-item" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.35rem 0', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
+            <span className="rs-tally-name">{nicknameMap[playerId] || `Player ${playerId}`}</span>
+            <span className="rs-tally-count" style={{ fontVariantNumeric: 'tabular-nums', minWidth: '5rem', textAlign: 'right', opacity: 0.8 }}>{count} {count === 1 ? 'vote' : 'votes'}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+/**
+ * VoteBreakdown — one row per voter, targets joined with ", ".
+ * Input from server is one entry per (voter, target) pair.
+ */
 function VoteBreakdown({ voteBreakdown = [] }) {
   if (!voteBreakdown.length) return null;
+
+  // Group by voterId, preserving first-seen order
+  const voterOrder = [];
+  const grouped = {};
+  for (const v of voteBreakdown) {
+    if (!grouped[v.voterId]) {
+      voterOrder.push(v.voterId);
+      grouped[v.voterId] = { voterNickname: v.voterNickname, targetNicknames: [] };
+    }
+    grouped[v.voterId].targetNicknames.push(v.targetNickname);
+  }
+
   return (
     <div className="rs-panel">
       <div className="rs-panel__header">VOTE BREAKDOWN</div>
       <ul className="rs-vote-list">
-        {voteBreakdown.map((v, i) => (
-          <li key={i} className="rs-vote-item">
-            <span className="rs-vote-voter">{v.voterNickname}</span>
-            <span className="rs-vote-arrow">→</span>
-            <span className="rs-vote-target">{v.targetNickname}</span>
-          </li>
-        ))}
+        {voterOrder.map((voterId) => {
+          const { voterNickname, targetNicknames } = grouped[voterId];
+          return (
+            <li key={voterId} className="rs-vote-item">
+              <span className="rs-vote-voter">{voterNickname}</span>
+              <span className="rs-vote-arrow">→</span>
+              <span className="rs-vote-target">{targetNicknames.join(', ')}</span>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
@@ -205,19 +297,18 @@ export default function Result() {
   const { sessionToken, roomCode, isHost, playerId, setPhase, setRoundData } = useGame();
 
   const [result, setResult] = useState(() => {
-  const saved = sessionStorage.getItem('lastRoundResult');
-  return saved ? JSON.parse(saved) : null;
-});
+    const saved = sessionStorage.getItem('lastRoundResult');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [nextRound, setNextRound] = useState(() => {
-  const saved = sessionStorage.getItem('nextRoundInfo');
-  return saved ? JSON.parse(saved) : null;
-});
+    const saved = sessionStorage.getItem('nextRoundInfo');
+    return saved ? JSON.parse(saved) : null;
+  });
   const [isGameOver, setIsGameOver] = useState(
-  sessionStorage.getItem('gameFinished') === 'true'
-);
+    sessionStorage.getItem('gameFinished') === 'true'
+  );
 
-  
-  const [starting,    setStarting]  = useState(false);
+  const [starting,    setStarting]    = useState(false);
   const [socketError, setSocketError] = useState('');
   const roundCreatedRef = useRef(false);
 
@@ -230,33 +321,25 @@ export default function Result() {
 
     function onRoundResult(data) {
       sessionStorage.removeItem('gameFinished');
-  
-
-  sessionStorage.setItem(
-    'lastRoundResult',
-    JSON.stringify(data)
-  );
-
-  setResult(data);
-}
+      sessionStorage.setItem('lastRoundResult', JSON.stringify(data));
+      setResult(data);
+    }
 
     function onRoundNext(data) {
-  console.log('ROUND NEXT RECEIVED', data);
+      setNextRound(data);
+      setStarting(false);
+      roundCreatedRef.current = false;
+    }
 
-  setNextRound(data);
-  setStarting(false);
-  roundCreatedRef.current = false;
-}
-
-    // Navigation fix — must stay intact
     function onRoundCreated(data) {
       roundCreatedRef.current = true;
       setRoundData({
-        roundId:     data.roundId,
-        roundNumber: data.roundNumber,
-        totalRounds: data.totalRounds,
-        category:    data.category,
-        clueOrder:   data.clueOrder,
+        roundId:       data.roundId,
+        roundNumber:   data.roundNumber,
+        totalRounds:   data.totalRounds,
+        category:      data.category,
+        clueOrder:     data.clueOrder,
+        imposterCount: data.imposterCount,
       });
     }
 
@@ -266,24 +349,20 @@ export default function Result() {
       navigate('/game');
     }
 
-   function onGameFinished(data) {
-  console.log('GAME FINISHED RECEIVED', data);
+    function onGameFinished(data) {
+      sessionStorage.setItem('gameFinished', 'true');
+      if (data?.finalScores) {
+        setResult(prev => prev ? { ...prev, scores: data.finalScores } : prev);
+      }
+      setIsGameOver(true);
+      setNextRound(null);
+      setPhase('finished');
+    }
 
-  sessionStorage.setItem('gameFinished', 'true');
-
-  if (data?.finalScores) {
-    setResult(prev => prev ? { ...prev, scores: data.finalScores } : prev);
-  }
-
-  setIsGameOver(true);
-  setNextRound(null);
-  setPhase('finished');
-}
     function onError(err) {
       setStarting(false);
       setSocketError(err.message || 'Something went wrong.');
     }
-
 
     socket.on('round:result',  onRoundResult);
     socket.on('round:next',    onRoundNext);
@@ -291,10 +370,6 @@ export default function Result() {
     socket.on('round:info',    onRoundInfo);
     socket.on('game:finished', onGameFinished);
     socket.on('error',         onError);
-
-
-
-
 
     return () => {
       socket.off('round:result',  onRoundResult);
@@ -307,55 +382,46 @@ export default function Result() {
   }, [sessionToken, setRoundData, setPhase, navigate]);
 
   const handleStartNext = useCallback(() => {
-  if (starting) return;
-
-  sessionStorage.removeItem('nextRoundInfo');
-
-  setStarting(true);
-  setSocketError('');
-  socket.emit('round:start-next');
-}, [starting]);
+    if (starting) return;
+    sessionStorage.removeItem('nextRoundInfo');
+    setStarting(true);
+    setSocketError('');
+    socket.emit('round:start-next');
+  }, [starting]);
 
   if (!result) {
-  console.log('RESULT IS NULL', {
-    nextRound,
-    isGameOver
-  });
-
-  return (
-    <div className="rs-page rs-page--loading">
-      <div className="loading-case">
-        <div className="loading-folder">📋</div>
-        <p className="loading-text">PROCESSING RESULTS…</p>
+    return (
+      <div className="rs-page rs-page--loading">
+        <div className="loading-case">
+          <div className="loading-folder">📋</div>
+          <p className="loading-text">PROCESSING RESULTS…</p>
+        </div>
       </div>
-    </div>
-  );
-}
+    );
+  }
 
- const { roundType, word, alternateWord, eliminatedPlayer, targetPlayer,
-          correctVote, isTie, voteBreakdown, scoreDeltas, scores } = result;
+  const { roundType, word, alternateWord,
+          eliminatedPlayers = [], targetPlayers = [],
+          correctVote, isTie, voteCounts, voteBreakdown, scoreDeltas, scores } = result;
 
-
- 
-
-  // Derive roundNumber: nextRound.nextRoundNumber is the NEXT round, so current = next - 1
   const roundNumber = nextRound ? nextRound.nextRoundNumber - 1 : null;
   const totalRounds = nextRound ? nextRound.totalRounds : null;
 
-  
   return (
     <div className="rs-page">
 
       <RoundStamp roundType={roundType} roundNumber={roundNumber} totalRounds={totalRounds} />
 
       <VerdictPanel
-        eliminatedPlayer={eliminatedPlayer}
-        targetPlayer={targetPlayer}
+        eliminatedPlayers={eliminatedPlayers}
+        targetPlayers={targetPlayers}
         correctVote={correctVote}
         isTie={isTie}
       />
 
       <WordReveal roundType={roundType} word={word} alternateWord={alternateWord} />
+
+      <VoteTally voteCounts={voteCounts} scores={scores} />
 
       <VoteBreakdown voteBreakdown={voteBreakdown} />
 
@@ -367,22 +433,20 @@ export default function Result() {
 
       <div className="rs-next-wrapper">
         {isGameOver ? (
-  <div className="rs-game-over">
-    <p className="rs-game-over__title">Game Over</p>
-
-    <button
-      className="btn btn--ghost btn--full"
-      onClick={() => {
-        sessionStorage.removeItem('gameFinished');
-        sessionStorage.removeItem('nextRoundInfo');
-        navigate('/');
-      }}
-    >
-      Back to Home
-    </button>
-  </div>
-)
-        : nextRound && isHost ? (
+          <div className="rs-game-over">
+            <p className="rs-game-over__title">Game Over</p>
+            <button
+              className="btn btn--ghost btn--full"
+              onClick={() => {
+                sessionStorage.removeItem('gameFinished');
+                sessionStorage.removeItem('nextRoundInfo');
+                navigate('/');
+              }}
+            >
+              Back to Home
+            </button>
+          </div>
+        ) : nextRound && isHost ? (
           <button
             className="btn btn--primary btn--full rs-next-btn"
             onClick={handleStartNext}

@@ -12,9 +12,11 @@
 //  roundState.get(roomCode) → {
 //    roundId:       number,
 //    readyPlayers:  Set<playerId>,
-//    votes:         Map<voterId, targetId>,
+//    votes:         Map<voterId, targetId[]>,   ← array, one entry per voter
 //    totalPlayers:  number,
+//    imposterCount: number,                     ← needed for vote validation + elimination
 //    voteTimer:     NodeJS.Timeout | null,
+//    tickInterval:  NodeJS.Timeout | null,
 //    phase:         'discussion' | 'voting' | 'results'
 //  }
 //
@@ -35,18 +37,21 @@ const roundState = new Map();
  * @param {string} roomCode
  * @param {number} roundId
  * @param {number} totalPlayers
+ * @param {number} [imposterCount=1]
  */
-function initRoundState(roomCode, roundId, totalPlayers) {
+function initRoundState(roomCode, roundId, totalPlayers, imposterCount = 1) {
   // Clear any stale state from a previous round
   clearRoundState(roomCode);
 
   roundState.set(roomCode, {
     roundId,
-    readyPlayers: new Set(),
-    votes:        new Map(),
+    readyPlayers:  new Set(),
+    votes:         new Map(),   // Map<voterId, targetId[]>
     totalPlayers,
-    voteTimer:    null,
-    phase:        'discussion',
+    imposterCount,              // how many targets each player must vote for
+    voteTimer:     null,
+    tickInterval:  null,
+    phase:         'discussion',
   });
 }
 
@@ -62,14 +67,15 @@ function getRoundState(roomCode) {
 
 /**
  * Clears state for a room (called after results are broadcast).
- * Cancels any running timer to prevent memory leaks.
+ * Cancels any running timers to prevent memory leaks.
  *
  * @param {string} roomCode
  */
 function clearRoundState(roomCode) {
   const state = roundState.get(roomCode);
-  if (state && state.voteTimer) {
-    clearTimeout(state.voteTimer);
+  if (state) {
+    if (state.voteTimer)    clearTimeout(state.voteTimer);
+    if (state.tickInterval) clearInterval(state.tickInterval);
   }
   roundState.delete(roomCode);
 }

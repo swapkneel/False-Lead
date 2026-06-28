@@ -1,26 +1,12 @@
 // client/src/pages/Game.jsx
 // ─────────────────────────────────────────────────────────────────────────────
 //  Round Screen — "Opening the Case File"
-//
-//  Changes from previous version:
-//    1. Round type is NEVER displayed publicly — header shows only
-//       Round N/Total and Category.
-//    2. similar_word_target removed from ROLE_CONFIG — that player
-//       now receives role:'normal' from the server and sees identical UI.
-//    3. Visual redesign: case-file / classified document aesthetic.
-//    4. Listens for round:next to reset state for the next round.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState, useCallback } from 'react';
 import { useNavigate }                       from 'react-router-dom';
 import { useGame }                           from '../context/GameContext';
 import socket                                from '../services/socket';
-
-// ─────────────────────────────────────────────
-//  Role configuration
-//  similar_word_target deliberately absent — server sends 'normal' for that role.
-//  Chaos players also receive 'normal'. This table only needs two real entries.
-// ─────────────────────────────────────────────
 
 const ROLE_CONFIG = {
   normal: {
@@ -70,10 +56,6 @@ function getRoleConfig(role) {
   return ROLE_CONFIG[role] || DEFAULT_CONFIG;
 }
 
-// ─────────────────────────────────────────────
-//  Sub-components
-// ─────────────────────────────────────────────
-
 function CaseFileHeader({ roundNumber, totalRounds, category }) {
   return (
     <div className="cf-header">
@@ -82,9 +64,9 @@ function CaseFileHeader({ roundNumber, totalRounds, category }) {
         <span className="cf-round-num">{String(roundNumber).padStart(2,'0')} / {String(totalRounds).padStart(2,'0')}</span>
       </div>
       <div className="cf-category-row">
-  <span className="cf-category-icon" aria-hidden="true">📁</span>
-  <span className="cf-category">CLASSIFIED</span>
-</div>
+        <span className="cf-category-icon" aria-hidden="true">📁</span>
+        <span className="cf-category">CLASSIFIED</span>
+      </div>
     </div>
   );
 }
@@ -101,30 +83,25 @@ function EvidenceCard({ role, receivedInfo }) {
         '--card-glow':   cfg.glow,
       }}
     >
-      {/* Top strip — classification level */}
       <div className="evidence-card__strip">
         <span className="evidence-card__eyebrow">{cfg.eyebrow}</span>
         <span className="evidence-card__icon">{cfg.icon}</span>
       </div>
 
-      {/* Role name */}
       <div className="evidence-card__role-row">
         <span className="evidence-card__role-tag">ROLE</span>
         <span className="evidence-card__role-name">{cfg.label}</span>
       </div>
 
-      {/* The word / clue — dominant element */}
       <div className="evidence-card__word-block">
         <p className="evidence-card__word-label">{cfg.infoLabel}</p>
         <p className="evidence-card__word">{receivedInfo}</p>
       </div>
 
-      {/* Flavour hint */}
       {cfg.hint && (
         <p className="evidence-card__hint">{cfg.hint}</p>
       )}
 
-      {/* Decorative redaction bars */}
       <div className="evidence-card__redact" aria-hidden="true">
         <span /><span /><span />
       </div>
@@ -180,10 +157,6 @@ function ReadyPanel({ readyCount, totalPlayers, onReady, isReady }) {
   );
 }
 
-// ─────────────────────────────────────────────
-//  Page
-// ─────────────────────────────────────────────
-
 export default function Game() {
   const navigate = useNavigate();
   const { sessionToken, roomCode, roundData, players, setRoundData, setPhase } = useGame();
@@ -206,42 +179,28 @@ export default function Game() {
     }
   }, [sessionToken]);
 
-  // If roundData already contains role when this component mounts (the normal
-  // case for Round 2+, where Result.jsx stored everything before navigating),
-  // show the card immediately without waiting for a socket event.
   useEffect(() => {
     if (roundData?.role && roundData?.receivedInfo) {
       setTimeout(() => setCardVisible(true), 150);
     }
-  }, [roundData?.roundId]);  // re-run only when roundId changes (new round)
+  }, [roundData?.roundId]);
 
   useEffect(() => {
     if (!sessionToken) return;
 
-    // ROOT CAUSE FIX:
-    // round:created and round:info are now handled in Result.jsx BEFORE
-    // navigation to /game. By the time Game.jsx mounts, context already has
-    // the complete round data (public + private). Game.jsx does NOT need to
-    // listen for round:created at all — data is already there.
-    //
-    // round:info is kept here as a safety net only: if somehow this component
-    // is mounted and a new round:info arrives (e.g. host starts round 1 from
-    // lobby directly), we store it and show the card.
-
     function onRoundCreated(data) {
-  setRoundData({
-    roundId: data.roundId,
-    roundNumber: data.roundNumber,
-    totalRounds: data.totalRounds,
-    category: data.category,
-    clueOrder: data.clueOrder,
-  });
-}
+      setRoundData({
+        roundId:       data.roundId,
+        roundNumber:   data.roundNumber,
+        totalRounds:   data.totalRounds,
+        roundType:     data.roundType,
+        category:      data.category,
+        clueOrder:     data.clueOrder,
+        imposterCount: data.imposterCount,
+      });
+    }
 
     function onRoundInfo(data) {
-      // Safety net — normally this fires in Result.jsx before navigation.
-      // If we receive it here it means Game.jsx was already mounted (round 1
-      // started from lobby). Store and show.
       setRoundData({
         role:         data.role,
         receivedInfo: data.receivedInfo,

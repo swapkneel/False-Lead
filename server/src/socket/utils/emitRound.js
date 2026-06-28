@@ -12,12 +12,19 @@
 //    7a   round:created  → broadcast to room
 //    7b   round:info     → emit privately to each socket
 //    -    initRoundState — ready for player:ready events
+//
+//  Multi-vote change:
+//    resolveImposterCount() is called here (same logic as roleAssignmentService)
+//    so that imposterCount is available for:
+//      - initRoundState (4th argument) — needed by voteHandlers validation
+//      - round:created broadcast       — needed by the frontend Voting component
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
-const { createRound }    = require('../../services/roundService');
-const { initRoundState } = require('../roundState');
-const { getConnectedPlayers } = require('../queries');
+const { createRound }          = require('../../services/roundService');
+const { initRoundState }       = require('../roundState');
+const { getConnectedPlayers }  = require('../queries');
+const { resolveImposterCount } = require('../../services/roleAssignmentService');
 
 /**
  * Creates a round and emits all socket events for it.
@@ -40,12 +47,23 @@ async function emitRound(io, pool, { roomId, roomCode, roundNumber, totalRounds,
   // changed between game:start and now (disconnect during category voting etc.)
   const players = await getConnectedPlayers(pool, roomId);
 
-  if (players.length < 2) {
+  if (players.length < 3) {
     throw Object.assign(new Error('Not enough players to start a round'), {
       code: 'NOT_ENOUGH_PLAYERS',
     });
   }
 
+  // Resolve imposter count using the same function as roleAssignmentService
+  // so the value is guaranteed to be consistent with the actual assignments.
+  const imposterCount = resolveImposterCount(
+    settings.imposter_count,
+    players.length
+  );
+console.log("========== EMIT ROUND ==========");
+console.log("Round:", roundNumber);
+console.log("Settings:", settings);
+console.log("Resolved imposters:", imposterCount);
+console.log("===============================");
   // ── Phases 1-6: DB work ───────────────────────────────────────────────
   const round = await createRound(pool, {
     roomId,
@@ -71,26 +89,22 @@ async function emitRound(io, pool, { roomId, roomCode, roundNumber, totalRounds,
     });
 
   io.to(roomCode).emit('round:created', {
-    roundId:     round.roundId,
-    roundNumber: round.roundNumber,
+    roundId:      round.roundId,
+    roundNumber:  round.roundNumber,
     totalRounds,
-    roundType:   announcedRoundType,
-    category:    round.category,
-    clueOrder:   publicClueOrder,
+    roundType:    announcedRoundType,
+    category:     round.category,
+    clueOrder:    publicClueOrder,
+    imposterCount,   // ← frontend reads this in Voting.jsx via roundData
   });
-  
 
   // ── Phase 7b: private emit to each socket ─────────────────────────────
-  // Fetch all sockets currently in this Socket.IO room and match them
-  // to their assignment. Uses s.emit() — never io.to(room).emit() for secrets.
   const roomSockets = await io.in(roomCode).fetchSockets();
 
   for (const s of roomSockets) {
     const assignment = round.assignments.find(a => a.playerId === s.data.playerId);
     if (!assignment) continue;
 
-    // socketRole is what the player sees (hides chaos/similar_word identity).
-    // role is the DB truth used for scoring.
     const visibleRole = assignment.socketRole ?? assignment.role;
 
     s.emit('round:info', {
@@ -99,18 +113,23 @@ async function emitRound(io, pool, { roomId, roomCode, roundNumber, totalRounds,
       receivedInfo: assignment.receivedInfo,
       clueOrder:    assignment.clueOrder,
       isImposter:   visibleRole === 'imposter',
-      isOddOne:     false,    // never tell the client they are the odd one
+      isOddOne:     false,
       isSpy:        visibleRole === 'reverse_spy_target',
     });
   }
 
   // ── Init in-memory voting state ───────────────────────────────────────
   // Must happen after socket events so player:ready can fire immediately.
-  initRoundState(roomCode, round.roundId, players.length);
+  // imposterCount is stored on state so voteHandlers can validate ballot
+  // length and votingService can eliminate the correct number of players.
+
+  
+  initRoundState(roomCode, round.roundId, players.length, imposterCount);
 
   console.log(
     `[emitRound] Round ${round.roundNumber} started in ${roomCode} ` +
-    `— type: ${round.roundType}, category: ${round.category}, word: ${round.word}`
+    `— type: ${round.roundType}, category: ${round.category}, word: ${round.word}, ` +
+    `imposters: ${imposterCount}`
   );
 }
 

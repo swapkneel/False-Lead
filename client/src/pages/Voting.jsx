@@ -7,11 +7,17 @@
 //    round:result — navigate to /result
 //
 //  Emits:
-//    vote:submit  { targetPlayerId }
+//    vote:submit  { targetPlayerIds: number[] }
 //
-//  Players appear as "evidence cards" — tapping one selects it.
-//  Submit is a separate button to prevent accidental votes.
-//  Once submitted, the UI locks and shows a confirmation.
+//  Multi-vote changes:
+//    selectedId  (single)  →  selectedIds[]  (array, up to imposterCount)
+//    Toggling a card adds/removes from the array.
+//    Selecting beyond the limit is silently ignored (card stays unselectable).
+//    Submit button disabled until selectedIds.length === imposterCount.
+//    Button label: "Submit Vote" (1 imposter) / "Submit Votes" (2+).
+//    Emits targetPlayerIds array instead of targetPlayerId.
+//
+//  All existing UI structure, classNames, socket event names preserved.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState, useCallback } from 'react';
@@ -23,16 +29,17 @@ import socket                                from '../services/socket';
 //  Evidence card — one per player
 // ─────────────────────────────────────────────
 
-function SuspectCard({ player, isSelected, isMe, isSubmitted, onSelect }) {
-  const disabled = isMe || isSubmitted;
+function SuspectCard({ player, isSelected, isMe, isSubmitted, isDisabled, onSelect }) {
+  const disabled = isMe || isSubmitted || isDisabled;
 
   return (
     <button
       className={[
         'suspect-card',
-        isSelected  ? 'suspect-card--selected'  : '',
-        isMe        ? 'suspect-card--you'        : '',
-        isSubmitted && !isSelected ? 'suspect-card--dim' : '',
+        isSelected            ? 'suspect-card--selected'  : '',
+        isMe                  ? 'suspect-card--you'        : '',
+        isSubmitted && !isSelected ? 'suspect-card--dim'  : '',
+        isDisabled && !isSelected ? 'suspect-card--dim'   : '',
       ].join(' ').trim()}
       onClick={() => !disabled && onSelect(player.id)}
       disabled={disabled}
@@ -68,8 +75,8 @@ function SuspectCard({ player, isSelected, isMe, isSubmitted, onSelect }) {
 // ─────────────────────────────────────────────
 
 function CountdownTimer({ secondsLeft }) {
-  const TOTAL = 30;
-  const pct   = Math.max(0, secondsLeft / TOTAL);
+  const TOTAL  = 30;
+  const pct    = Math.max(0, secondsLeft / TOTAL);
   const urgent = secondsLeft <= 10;
 
   return (
@@ -98,14 +105,17 @@ export default function Voting() {
   const navigate = useNavigate();
   const { sessionToken, roomCode, playerId, roundData, players, setPhase } = useGame();
 
-  const [selectedId,    setSelectedId]    = useState(null);
-  const [submitted,     setSubmitted]     = useState(false);
-  const [secondsLeft,   setSecondsLeft]   = useState(30);
-  const [socketError,   setSocketError]   = useState('');
+  // imposterCount tells us how many players each voter must select.
+  // Falls back to 1 so single-imposter games are identical to before.
+  const imposterCount = roundData?.imposterCount ?? 1;
+
+  const [selectedIds,  setSelectedIds]  = useState([]);   // number[]
+  const [submitted,    setSubmitted]    = useState(false);
+  const [secondsLeft,  setSecondsLeft]  = useState(30);
+  const [socketError,  setSocketError]  = useState('');
 
   const category    = roundData?.category    ?? '';
   const roundNumber = roundData?.roundNumber ?? '';
-  const roundId     = roundData?.roundId;
 
   // ── Redirect guard ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -121,6 +131,13 @@ export default function Voting() {
     }
   }, [sessionToken]);
 
+  // ── Reset selection when round changes ──────────────────────────────────
+  useEffect(() => {
+    setSelectedIds([]);
+    setSubmitted(false);
+    setSocketError('');
+  }, [roundData?.roundId]);
+
   // ── Socket listeners ────────────────────────────────────────────────────
   useEffect(() => {
     if (!sessionToken) return;
@@ -130,19 +147,10 @@ export default function Voting() {
     }
 
     function onResult(data) {
-  console.log(
-  'VOTING RECEIVED RESULT',
-  JSON.stringify(data, null, 2)
-);
-
-  sessionStorage.setItem(
-    'lastRoundResult',
-    JSON.stringify(data)
-  );
-
-  setPhase('results');
-  navigate('/result');
-}
+      sessionStorage.setItem('lastRoundResult', JSON.stringify(data));
+      setPhase('results');
+      navigate('/result');
+    }
 
     function onError(err) {
       setSocketError(err.message || 'Something went wrong.');
@@ -163,15 +171,45 @@ export default function Voting() {
 
   const handleSelect = useCallback((targetId) => {
     if (submitted) return;
-    setSelectedId(prev => prev === targetId ? null : targetId);
     setSocketError('');
-  }, [submitted]);
+
+    setSelectedIds(prev => {
+      // Toggle off if already selected
+      if (prev.includes(targetId)) {
+        return prev.filter(id => id !== targetId);
+      }
+      // Do not exceed the imposter count limit
+      if (prev.length >= imposterCount) return prev;
+      return [...prev, targetId];
+    });
+  }, [submitted, imposterCount]);
 
   const handleSubmit = useCallback(() => {
-    if (submitted || selectedId === null) return;
+    if (submitted || selectedIds.length !== imposterCount) return;
     setSubmitted(true);
-    socket.emit('vote:submit', { targetPlayerId: selectedId });
-  }, [submitted, selectedId]);
+    socket.emit('vote:submit', { targetPlayerIds: selectedIds });
+  }, [submitted, selectedIds, imposterCount]);
+
+  // ── Derived values ───────────────────────────────────────────────────────
+
+  const selectionFull   = selectedIds.length === imposterCount;
+  const canSubmit       = selectionFull && !submitted;
+
+  // Button label
+  const submitLabel = selectedIds.length === 0
+    ? `Select ${imposterCount} Suspect${imposterCount === 1 ? '' : 's'} First`
+    : !selectionFull
+      ? `Select ${imposterCount - selectedIds.length} More`
+      : imposterCount === 1
+        ? 'Submit Vote'
+        : 'Submit Votes';
+
+  // Instruction line
+  const instruction = submitted
+    ? 'Vote submitted. Waiting for other agents…'
+    : imposterCount === 1
+      ? 'Select the suspect you believe is the impostor.'
+      : `Select ${imposterCount} suspects you believe are the impostors. (${selectedIds.length}/${imposterCount} selected)`;
 
   // ── Render ──────────────────────────────────────────────────────────────
 
@@ -188,11 +226,7 @@ export default function Voting() {
       </div>
 
       {/* Instruction */}
-      <p className="voting-instruction">
-        {submitted
-          ? 'Vote submitted. Waiting for other agents…'
-          : 'Select the suspect you believe is the impostor.'}
-      </p>
+      <p className="voting-instruction">{instruction}</p>
 
       {/* Error */}
       {socketError && (
@@ -200,18 +234,25 @@ export default function Voting() {
       )}
 
       {/* Suspect grid */}
-     
       <div className="suspect-grid">
-        {players.map(player => (
-          <SuspectCard
-            key={player.id}
-            player={player}
-            isSelected={selectedId === player.id}
-            isMe={player.id === playerId}
-            isSubmitted={submitted}
-            onSelect={handleSelect}
-          />
-        ))}
+        {players.map(player => {
+          const isSelected = selectedIds.includes(player.id);
+          const isMe       = player.id === playerId;
+          // Dim unselected cards once the limit is reached (but allow deselect)
+          const isDisabled = !isSelected && selectionFull;
+
+          return (
+            <SuspectCard
+              key={player.id}
+              player={player}
+              isSelected={isSelected}
+              isMe={isMe}
+              isSubmitted={submitted}
+              isDisabled={isDisabled}
+              onSelect={handleSelect}
+            />
+          );
+        })}
       </div>
 
       {/* Submit — pinned to bottom */}
@@ -220,9 +261,9 @@ export default function Voting() {
           <button
             className="btn btn--primary btn--full voting-submit-btn"
             onClick={handleSubmit}
-            disabled={selectedId === null}
+            disabled={!canSubmit}
           >
-            {selectedId === null ? 'Select a Suspect First' : 'Submit Vote'}
+            {submitLabel}
           </button>
         </div>
       )}
