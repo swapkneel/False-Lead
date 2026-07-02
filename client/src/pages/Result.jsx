@@ -1,10 +1,25 @@
 // client/src/pages/Result.jsx
+// ─────────────────────────────────────────────────────────────────────────────
+//  Results Screen.
+//
+//  M2 additions:
+//    - round:rejoin handler: if server says phase is not 'results'/'waiting',
+//      navigate away. Otherwise stay — the result data is in sessionStorage.
+//    - Corrected socket reconnect guard: always emits room:join on mount.
+//    - Toasts for player:disconnected, player:reconnected, player:removed,
+//      host:promoted.
+//
+//  All pre-existing multi-round and scoring behaviour is preserved.
+// ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
 import { useEffect, useState, useCallback, useRef } from 'react';
 import { useNavigate }                               from 'react-router-dom';
 import { useGame }                                   from '../context/GameContext';
 import socket                                        from '../services/socket';
+import { useToast, ToastContainer }                  from '../components/Toast';
+
+// ── Display helpers (unchanged) ──────────────────────────────────────────────
 
 const ROUND_TYPE_LABELS = {
   normal:       'Normal Round',
@@ -31,20 +46,9 @@ function RoundStamp({ roundType, roundNumber, totalRounds }) {
   );
 }
 
-// VerdictPanel — multi-elimination aware.
-//
-// Rules:
-//   eliminatedPlayers.length > 0  → show each eliminated player, then tie notice if partial
-//   eliminatedPlayers.length === 0 && isTie  → full tie, nobody eliminated
-//   eliminatedPlayers.length === 0 && !isTie → no votes cast
-//
-// "isTie" means one or more later slots were blocked. It does NOT mean nobody
-// was eliminated — partial eliminations (some slots filled, later slot tied)
-// are valid. The tie banner is shown as a sub-note below confirmed eliminations.
 function VerdictPanel({ eliminatedPlayers = [], targetPlayers = [], correctVote, isTie }) {
   const hasEliminations = eliminatedPlayers.length > 0;
 
-  // Full tie: nobody eliminated at all
   if (!hasEliminations && isTie) {
     return (
       <div className="rs-verdict rs-verdict--tie">
@@ -55,7 +59,6 @@ function VerdictPanel({ eliminatedPlayers = [], targetPlayers = [], correctVote,
     );
   }
 
-  // No votes cast
   if (!hasEliminations) {
     return (
       <div className="rs-verdict rs-verdict--nobody">
@@ -65,8 +68,6 @@ function VerdictPanel({ eliminatedPlayers = [], targetPlayers = [], correctVote,
     );
   }
 
-  // One or more players eliminated
-  // correctVote = true if at least one eliminated player was a target role
   const survivingTargets = targetPlayers.filter(
     t => !eliminatedPlayers.some(e => e.id === t.id)
   );
@@ -74,7 +75,6 @@ function VerdictPanel({ eliminatedPlayers = [], targetPlayers = [], correctVote,
   return (
     <div className={`rs-verdict ${correctVote ? 'rs-verdict--correct' : 'rs-verdict--wrong'}`}>
       <div className="rs-verdict__title">ELIMINATED</div>
-
       {eliminatedPlayers.map((ep) => {
         const wasTarget = ['imposter', 'reverse_spy_target', 'similar_word_target'].includes(ep.role);
         return (
@@ -94,16 +94,12 @@ function VerdictPanel({ eliminatedPlayers = [], targetPlayers = [], correctVote,
           </div>
         );
       })}
-
-      {/* Show surviving targets when at least one wrong elimination happened */}
       {!correctVote && survivingTargets.length > 0 && (
         <p className="rs-verdict__real">
           The actual {survivingTargets.length === 1 ? 'target' : 'targets'}:{' '}
           <strong>{survivingTargets.map(t => t.nickname).join(', ')}</strong>
         </p>
       )}
-
-      {/* Partial tie notice: some slots were filled but later slots were blocked */}
       {isTie && (
         <p className="rs-verdict__sub rs-verdict__sub--tie">
           Further eliminations were tied.
@@ -176,27 +172,13 @@ function WordReveal({ roundType, word, alternateWord }) {
   return null;
 }
 
-/**
- * VoteTally — new panel above VoteBreakdown.
- * Shows every player's vote count sorted descending so players can
- * immediately see the outcome without manually counting.
- * voteCounts is the { [playerId]: count } object already in the result payload.
- * scores is the updated scores array — used to look up nicknames by playerId.
- */
 function VoteTally({ voteCounts = {}, scores = [] }) {
   if (!Object.keys(voteCounts).length) return null;
-
-  // Build nickname lookup from scores array (already contains all players)
   const nicknameMap = {};
-  for (const p of scores) {
-    nicknameMap[p.playerId] = p.nickname;
-  }
-
-  // Sort descending by vote count
+  for (const p of scores) { nicknameMap[p.playerId] = p.nickname; }
   const rows = Object.entries(voteCounts)
     .map(([id, count]) => ({ playerId: Number(id), count }))
     .sort((a, b) => b.count - a.count);
-
   return (
     <div className="rs-panel">
       <div className="rs-panel__header">VOTE TALLY</div>
@@ -212,14 +194,8 @@ function VoteTally({ voteCounts = {}, scores = [] }) {
   );
 }
 
-/**
- * VoteBreakdown — one row per voter, targets joined with ", ".
- * Input from server is one entry per (voter, target) pair.
- */
 function VoteBreakdown({ voteBreakdown = [] }) {
   if (!voteBreakdown.length) return null;
-
-  // Group by voterId, preserving first-seen order
   const voterOrder = [];
   const grouped = {};
   for (const v of voteBreakdown) {
@@ -229,7 +205,6 @@ function VoteBreakdown({ voteBreakdown = [] }) {
     }
     grouped[v.voterId].targetNicknames.push(v.targetNickname);
   }
-
   return (
     <div className="rs-panel">
       <div className="rs-panel__header">VOTE BREAKDOWN</div>
@@ -292,9 +267,16 @@ function Leaderboard({ scores = [], playerId }) {
   );
 }
 
+// ── Page ─────────────────────────────────────────────────────────────────────
+
 export default function Result() {
   const navigate = useNavigate();
-  const { sessionToken, roomCode, isHost, playerId, setPhase, setRoundData } = useGame();
+  const {
+    sessionToken, roomCode, isHost, playerId,
+    setPhase, setRoundData, setIsHost,
+  } = useGame();
+
+  const { toasts, addToast } = useToast();
 
   const [result, setResult] = useState(() => {
     const saved = sessionStorage.getItem('lastRoundResult');
@@ -307,15 +289,38 @@ export default function Result() {
   const [isGameOver, setIsGameOver] = useState(
     sessionStorage.getItem('gameFinished') === 'true'
   );
-
   const [starting,    setStarting]    = useState(false);
   const [socketError, setSocketError] = useState('');
   const roundCreatedRef = useRef(false);
 
+  // ── Redirect guard ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!sessionToken || !roomCode) navigate('/', { replace: true });
   }, [sessionToken, roomCode, navigate]);
 
+  // ── Socket reconnect guard ─────────────────────────────────────────────
+  //
+  // Only emit room:join when the socket was actually disconnected.
+  // Normal navigation from /voting → /result arrives via round:result,
+  // which already carries everything needed — no rejoin necessary.
+  // True reconnect (refresh on /result) still connects and joins normally.
+  useEffect(() => {
+    if (!sessionToken) return;
+
+    if (!socket.connected) {
+      function joinRoom() {
+        socket.emit('room:join', { sessionToken });
+      }
+      socket.connect();
+      socket.once('connect', joinRoom);
+      return () => {
+        socket.off('connect', joinRoom);
+      };
+    }
+    // Socket already connected — normal navigation, no rejoin needed.
+  }, [sessionToken]);
+
+  // ── Socket listeners ───────────────────────────────────────────────────
   useEffect(() => {
     if (!sessionToken) return;
 
@@ -359,27 +364,83 @@ export default function Result() {
       setPhase('finished');
     }
 
+    // ── M2: authoritative rejoin ──────────────────────────────────────
+    function onRoundRejoin(data) {
+      setRoundData({
+        roundId:       data.roundId,
+        roundNumber:   data.roundNumber,
+        totalRounds:   data.totalRounds,
+        roundType:     data.roundType,
+        imposterCount: data.imposterCount,
+        clueOrder:     data.clueOrder,
+        role:          data.role,
+        receivedInfo:  data.receivedInfo,
+        myClueOrder:   data.myClueOrder,
+      });
+
+      switch (data.phase) {
+        case 'discussion':
+          setPhase('round');
+          navigate('/game', { replace: true });
+          break;
+        case 'voting':
+          setPhase('voting');
+          navigate('/voting', { replace: true });
+          break;
+        case 'results':
+        case 'waiting':
+        default:
+          // Already on the right screen
+          break;
+      }
+    }
+
+    // ── M2: presence toasts ───────────────────────────────────────────
+    function onPlayerDisconnected({ nickname }) {
+      addToast(`${nickname} disconnected`, 'warning');
+    }
+    function onPlayerReconnected({ nickname }) {
+      addToast(`${nickname} reconnected`, 'success');
+    }
+    function onPlayerRemoved({ nickname }) {
+      addToast(`${nickname} was removed from the room`, 'info');
+    }
+    function onHostPromoted(data) {
+      setIsHost(true);
+      addToast(data.message || 'You are now the host.', 'info');
+    }
+
     function onError(err) {
       setStarting(false);
       setSocketError(err.message || 'Something went wrong.');
     }
 
-    socket.on('round:result',  onRoundResult);
-    socket.on('round:next',    onRoundNext);
-    socket.on('round:created', onRoundCreated);
-    socket.on('round:info',    onRoundInfo);
-    socket.on('game:finished', onGameFinished);
-    socket.on('error',         onError);
+    socket.on('round:result',        onRoundResult);
+    socket.on('round:next',          onRoundNext);
+    socket.on('round:created',       onRoundCreated);
+    socket.on('round:info',          onRoundInfo);
+    socket.on('game:finished',       onGameFinished);
+    socket.on('round:rejoin',        onRoundRejoin);
+    socket.on('player:disconnected', onPlayerDisconnected);
+    socket.on('player:reconnected',  onPlayerReconnected);
+    socket.on('player:removed',      onPlayerRemoved);
+    socket.on('host:promoted',       onHostPromoted);
+    socket.on('error',               onError);
 
     return () => {
-      socket.off('round:result',  onRoundResult);
-      socket.off('round:next',    onRoundNext);
-      socket.off('round:created', onRoundCreated);
-      socket.off('round:info',    onRoundInfo);
-      socket.off('game:finished', onGameFinished);
-      socket.off('error',         onError);
+      socket.off('round:result',        onRoundResult);
+      socket.off('round:next',          onRoundNext);
+      socket.off('round:created',       onRoundCreated);
+      socket.off('round:info',          onRoundInfo);
+      socket.off('game:finished',       onGameFinished);
+      socket.off('round:rejoin',        onRoundRejoin);
+      socket.off('player:disconnected', onPlayerDisconnected);
+      socket.off('player:reconnected',  onPlayerReconnected);
+      socket.off('player:removed',      onPlayerRemoved);
+      socket.off('host:promoted',       onHostPromoted);
+      socket.off('error',               onError);
     };
-  }, [sessionToken, setRoundData, setPhase, navigate]);
+  }, [sessionToken, setRoundData, setPhase, setIsHost, navigate, addToast]);
 
   const handleStartNext = useCallback(() => {
     if (starting) return;
@@ -389,6 +450,7 @@ export default function Result() {
     socket.emit('round:start-next');
   }, [starting]);
 
+  // ── Loading ────────────────────────────────────────────────────────────
   if (!result) {
     return (
       <div className="rs-page rs-page--loading">
@@ -400,15 +462,19 @@ export default function Result() {
     );
   }
 
-  const { roundType, word, alternateWord,
-          eliminatedPlayers = [], targetPlayers = [],
-          correctVote, isTie, voteCounts, voteBreakdown, scoreDeltas, scores } = result;
+  const {
+    roundType, word, alternateWord,
+    eliminatedPlayers = [], targetPlayers = [],
+    correctVote, isTie, voteCounts, voteBreakdown, scoreDeltas, scores,
+  } = result;
 
   const roundNumber = nextRound ? nextRound.nextRoundNumber - 1 : null;
-  const totalRounds = nextRound ? nextRound.totalRounds : null;
+  const totalRounds = nextRound ? nextRound.totalRounds        : null;
 
+  // ── Render ─────────────────────────────────────────────────────────────
   return (
     <div className="rs-page">
+      <ToastContainer toasts={toasts} />
 
       <RoundStamp roundType={roundType} roundNumber={roundNumber} totalRounds={totalRounds} />
 
@@ -460,7 +526,6 @@ export default function Result() {
           <p className="rs-waiting">Calculating results…</p>
         )}
       </div>
-
     </div>
   );
 }

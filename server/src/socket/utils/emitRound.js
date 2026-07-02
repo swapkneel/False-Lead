@@ -2,28 +2,39 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Shared helper: create a round in the DB and emit all socket events for it.
 //
-//  Previously this logic lived only in gameHandlers. Extracting it here lets:
-//    lobbyHandlers  — auto-start round 1 when game:start fires
-//    voteHandlers   — auto-start round N+1 when the previous round resolves
-//    gameHandlers   — kept as a thin wrapper around this (round:start event)
-//
 //  This function owns phases 1-7 end-to-end for a single round:
 //    1-6  createRound()  — DB work (word, roles, inserts)
 //    7a   round:created  → broadcast to room
 //    7b   round:info     → emit privately to each socket
 //    -    initRoundState — ready for player:ready events
 //
-//  Multi-vote change:
-//    resolveImposterCount() is called here (same logic as roleAssignmentService)
-//    so that imposterCount is available for:
-//      - initRoundState (4th argument) — needed by voteHandlers validation
-//      - round:created broadcast       — needed by the frontend Voting component
+//  Regression fix (post-M2 reconnect testing):
+//    Previously this used getConnectedPlayers (is_connected = 1 only) to
+//    build the round roster. This meant a player who was mid-grace-period
+//    (disconnected but their seat still reserved) was silently excluded
+//    from the round entirely — no role, no round_players row, no clue
+//    order slot. When they reconnected they had nothing to rejoin into,
+//    they could not be voted for ("may not be present"), and totalPlayers
+//    counts went stale because the round was built for N-1 players while
+//    the room still had N seats.
+//
+//    Fix: use getRoomPlayers WITHOUT the onlineOnly filter. A reserved
+//    seat participates fully in the round (role, clue order, vote
+//    eligibility) regardless of current connection status — exactly as
+//    originally specified: disconnection during a round must never remove
+//    a player from that round, only from live interaction.
+//
+//    The minimum-player check still requires 3 to START a round at all,
+//    but that check now also counts reserved seats, matching game:start's
+//    existing online-only check intentionally being separate (you need
+//    online players to START — see lobbyHandlers — but once started, an
+//    offline-but-reserved seat still belongs to the round).
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
 const { createRound }          = require('../../services/roundService');
 const { initRoundState }       = require('../roundState');
-const { getConnectedPlayers }  = require('../queries');
+const { getRoomPlayers }       = require('../queries');
 const { resolveImposterCount } = require('../../services/roleAssignmentService');
 
 /**
@@ -43,9 +54,13 @@ const { resolveImposterCount } = require('../../services/roleAssignmentService')
  * @throws  passes through any error from createRound for the caller to handle
  */
 async function emitRound(io, pool, { roomId, roomCode, roundNumber, totalRounds, settings }) {
-  // Always fetch fresh connected players at emit time — state may have
-  // changed between game:start and now (disconnect during category voting etc.)
-  const players = await getConnectedPlayers(pool, roomId);
+  // ── M1.2 fix: roster includes reserved (offline-but-not-removed) seats ──
+  // Previously this used getConnectedPlayers (is_connected = 1 only), which
+  // excluded anyone mid-grace-period from the round entirely. A reserved
+  // seat must still receive a role and a round_players row — only live
+  // interaction (voting, ready) is affected by connection status, not
+  // round membership.
+  const players = await getRoomPlayers(pool, roomId);
 
   if (players.length < 3) {
     throw Object.assign(new Error('Not enough players to start a round'), {
@@ -53,17 +68,18 @@ async function emitRound(io, pool, { roomId, roomCode, roundNumber, totalRounds,
     });
   }
 
-  // Resolve imposter count using the same function as roleAssignmentService
-  // so the value is guaranteed to be consistent with the actual assignments.
   const imposterCount = resolveImposterCount(
     settings.imposter_count,
     players.length
   );
-console.log("========== EMIT ROUND ==========");
-console.log("Round:", roundNumber);
-console.log("Settings:", settings);
-console.log("Resolved imposters:", imposterCount);
-console.log("===============================");
+
+  console.log('========== EMIT ROUND ==========');
+  console.log('Round:', roundNumber);
+  console.log('Settings:', settings);
+  console.log('Resolved imposters:', imposterCount);
+  console.log('Roster size (incl. reserved seats):', players.length);
+  console.log('===============================');
+
   // ── Phases 1-6: DB work ───────────────────────────────────────────────
   const round = await createRound(pool, {
     roomId,
@@ -74,7 +90,6 @@ console.log("===============================");
   });
 
   // ── Phase 7a: public broadcast to whole room ──────────────────────────
-  // Chaos disguises itself as normal in the public event.
   const announcedRoundType = round.roundType === 'chaos' ? 'normal' : round.roundType;
 
   const publicClueOrder = round.assignments
@@ -95,10 +110,14 @@ console.log("===============================");
     roundType:    announcedRoundType,
     category:     round.category,
     clueOrder:    publicClueOrder,
-    imposterCount,   // ← frontend reads this in Voting.jsx via roundData
+    imposterCount,
   });
 
-  // ── Phase 7b: private emit to each socket ─────────────────────────────
+  // ── Phase 7b: private emit to each connected socket ───────────────────
+  // Note: only currently-connected sockets receive round:info directly.
+  // A player mid-grace-period has no live socket to receive this — they
+  // will get their role via round:rejoin when they reconnect, since their
+  // round_players row now exists (the fix above) and emitRejoin reads it.
   const roomSockets = await io.in(roomCode).fetchSockets();
 
   for (const s of roomSockets) {
@@ -119,17 +138,18 @@ console.log("===============================");
   }
 
   // ── Init in-memory voting state ───────────────────────────────────────
-  // Must happen after socket events so player:ready can fire immediately.
-  // imposterCount is stored on state so voteHandlers can validate ballot
-  // length and votingService can eliminate the correct number of players.
-
-  
+  // totalPlayers now reflects the FULL roster (reserved seats included),
+  // matching round_players row count. voteHandlers derives the "online"
+  // subset live via socket room membership for ready/vote-completion
+  // checks — totalPlayers here is the round's seat count, not the online
+  // count, and the two are intentionally different numbers used for
+  // different purposes.
   initRoundState(roomCode, round.roundId, players.length, imposterCount);
 
   console.log(
     `[emitRound] Round ${round.roundNumber} started in ${roomCode} ` +
     `— type: ${round.roundType}, category: ${round.category}, word: ${round.word}, ` +
-    `imposters: ${imposterCount}`
+    `imposters: ${imposterCount}, roster: ${players.length}`
   );
 }
 

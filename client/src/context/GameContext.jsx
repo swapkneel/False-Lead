@@ -2,25 +2,34 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Global game state shared across all pages and components.
 //
-//  Persisted to localStorage so a page refresh during a game restores
-//  the session. The session token is the key — it lets the player
-//  reconnect to their room via Socket.IO without re-joining via REST.
+//  Persisted to localStorage so a page refresh during a game can attempt
+//  to restore the session.  The session token is the key — it lets the
+//  player reconnect to their room via Socket.IO without re-joining via REST.
+//
+//  M2 changes:
+//    - gamePhase is now persisted to localStorage as a cold-start fallback.
+//      Once the socket reconnects, round:rejoin overrides it authoritatively.
+//    - updateLobby now preserves isOnline on each player (set by the server
+//      via the isOnline field on lobby:updated player entries).
+//    - setIsHost added so the host:promoted handler can update context without
+//      a full re-join flow.
+//    - Storage now includes gamePhase so a cold refresh lands on the right
+//      route while waiting for the server to confirm.
 //
 //  State shape:
 //  {
-//    playerId:    number | null,
-//    nickname:    string,
-//    sessionToken: string,        — UUID, used for socket auth + reconnect
-//    roomCode:    string,
-//    isHost:      boolean,
-//    players:     Player[],       — live list from lobby:updated
-//    roomStatus:  string,         — mirrors rooms.status
-//    gamePhase:   string,         — client-side phase tracker
+//    playerId:     number | null,
+//    nickname:     string,
+//    sessionToken: string,
+//    roomCode:     string,
+//    isHost:       boolean,
+//    players:      Player[],       ← each has isOnline: boolean (M2)
+//    roomStatus:   string,
+//    gamePhase:    string,
+//    roundData:    RoundData | null,
 //  }
 //
-//  gamePhase is distinct from roomStatus:
-//    roomStatus is the DB value ('waiting', 'voting', 'in_progress', 'finished')
-//    gamePhase is what the client UI shows ('home', 'lobby', 'round', 'results')
+//  gamePhase values: 'home' | 'lobby' | 'round' | 'voting' | 'results' | 'finished'
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { createContext, useContext, useState, useEffect, useCallback } from 'react';
@@ -37,13 +46,11 @@ const DEFAULT_STATE = {
   isHost:       false,
   players:      [],
   roomStatus:   '',
-  gamePhase:    'home',   // 'home' | 'lobby' | 'round' | 'voting' | 'results' | 'finished'
+  gamePhase:    'home',
 
-  // Round data — populated when round:created + round:info both arrive
+  // Round data — populated when round:created + round:info both arrive,
+  // or restored wholesale from round:rejoin.
   roundData: null,
-  // Shape: { roundId, roundNumber, totalRounds, roundType, category,
-  //   clueOrder:[{playerId,nickname,order}], role, receivedInfo,
-  //   isImposter, isOddOne, isSpy }
 };
 
 const STORAGE_KEY = 'falselead_session';
@@ -63,10 +70,12 @@ function loadFromStorage() {
 
 function saveToStorage(state) {
   try {
-    // Only persist identity fields — UI phase is derived on load
-    const { playerId, nickname, sessionToken, roomCode, isHost } = state;
+    // Persist identity fields + gamePhase as a cold-start fallback.
+    // gamePhase will be immediately overridden by round:rejoin once the
+    // socket reconnects — it is only used to choose the initial route.
+    const { playerId, nickname, sessionToken, roomCode, isHost, gamePhase } = state;
     localStorage.setItem(STORAGE_KEY, JSON.stringify({
-      playerId, nickname, sessionToken, roomCode, isHost,
+      playerId, nickname, sessionToken, roomCode, isHost, gamePhase,
     }));
   } catch {
     // localStorage unavailable (private browsing with restrictions, etc.)
@@ -87,32 +96,35 @@ const GameContext = createContext(null);
 
 export function GameProvider({ children }) {
   const [state, setState] = useState(() => {
-    // Rehydrate from localStorage on first render.
-    // If a session exists, the player will reconnect via socket on Lobby mount.
     const saved = loadFromStorage();
     if (saved && saved.sessionToken && saved.roomCode) {
       return {
         ...DEFAULT_STATE,
         ...saved,
-        gamePhase: 'lobby',   // assume they were in lobby if session exists
+        // Use persisted gamePhase as the cold-start fallback.
+        // round:rejoin will override this once the socket connects.
+        gamePhase: saved.gamePhase || 'lobby',
       };
     }
     return DEFAULT_STATE;
   });
 
-  // Persist identity fields whenever they change
+  // Persist whenever identity or phase changes
   useEffect(() => {
     if (state.sessionToken) {
       saveToStorage(state);
     }
-  }, [state.sessionToken, state.playerId, state.nickname, state.roomCode, state.isHost]);
+  }, [
+    state.sessionToken,
+    state.playerId,
+    state.nickname,
+    state.roomCode,
+    state.isHost,
+    state.gamePhase,
+  ]);
 
   // ── Setters ───────────────────────────────────────────────────────────────
 
-  /**
-   * Called after a successful createRoom or joinRoom API call.
-   * Stores the player's identity and navigates them to the lobby phase.
-   */
   const setSession = useCallback(({ playerId, nickname, sessionToken, roomCode, isHost }) => {
     setState(prev => ({
       ...prev,
@@ -126,8 +138,8 @@ export function GameProvider({ children }) {
   }, []);
 
   /**
-   * Called when the server emits lobby:updated.
-   * Updates the live player list and room status.
+   * Called on lobby:updated.
+   * Players now carry isOnline: boolean from the server — preserve it.
    */
   const updateLobby = useCallback(({ players, status }) => {
     setState(prev => ({
@@ -137,33 +149,28 @@ export function GameProvider({ children }) {
     }));
   }, []);
 
-  /**
-   * Advances the client to a new game phase.
-   * Used by socket event listeners to transition the UI.
-   */
   const setPhase = useCallback((phase) => {
     setState(prev => ({ ...prev, gamePhase: phase }));
   }, []);
 
   /**
-   * Clears all state and localStorage. Called when game ends or player
-   * navigates home.
+   * Flip isHost in context.
+   * Called when this socket receives host:promoted so the Start Game
+   * button and other host-only controls appear immediately.
    */
+  const setIsHost = useCallback((value) => {
+    setState(prev => ({ ...prev, isHost: Boolean(value) }));
+  }, []);
+
   const resetSession = useCallback(() => {
     clearStorage();
     setState(DEFAULT_STATE);
   }, []);
 
   /**
-   * Stores round data from round:created and round:info.
-   *
-   * FIX: The old merge-always approach caused stale receivedInfo to survive
-   * into Round 2. The new rule: if the incoming data contains a roundId that
-   * differs from the current roundId, it is a new round — replace entirely
-   * rather than merging. This clears stale role/receivedInfo from Round N-1.
-   *
-   * If no roundId is in the incoming data (i.e. it is round:info merging
-   * into an already-set round:created payload), merge normally.
+   * Stores round data from round:created / round:info events.
+   * If the incoming data has a different roundId → replace entirely (new round).
+   * If no roundId in incoming data → merge into existing round (e.g. round:info).
    */
   const setRoundData = useCallback((data) => {
     setState(prev => {
@@ -171,20 +178,18 @@ export function GameProvider({ children }) {
       return {
         ...prev,
         roundData: isNewRound
-          ? data                                        // new round — start fresh
-          : { ...(prev.roundData || {}), ...data },    // same round — merge (e.g. round:info)
+          ? data
+          : { ...(prev.roundData || {}), ...data },
       };
     });
   }, []);
 
   const value = {
-    // State
     ...state,
-
-    // Actions
     setSession,
     updateLobby,
     setPhase,
+    setIsHost,
     setRoundData,
     resetSession,
   };
@@ -196,10 +201,6 @@ export function GameProvider({ children }) {
   );
 }
 
-/**
- * Hook for consuming game context.
- * Throws a clear error if used outside GameProvider.
- */
 export function useGame() {
   const ctx = useContext(GameContext);
   if (!ctx) throw new Error('useGame must be used inside <GameProvider>');

@@ -1573,3 +1573,147 @@ h1, h2, h3 { line-height: 1.2; }
 @media (max-width: 380px) {
   .rs-page { padding-left: 1rem; padding-right: 1rem; }
 }
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   M2 CSS additions for False Lead
+   Add these rules to your existing stylesheet (e.g. index.css or App.css).
+   Nothing here overrides existing rules.
+   ───────────────────────────────────────────────────────────────────────────── */
+
+/* ─────────────────────────────────────────────
+   Toast system
+   ───────────────────────────────────────────── */
+
+.toast-container {
+  position: fixed;
+  top: 1rem;
+  right: 1rem;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  pointer-events: none;
+  max-width: min(22rem, calc(100vw - 2rem));
+}
+
+.toast {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.65rem 1rem;
+  border-radius: 8px;
+  font-size: 0.85rem;
+  font-weight: 500;
+  pointer-events: auto;
+  cursor: pointer;
+  backdrop-filter: blur(8px);
+  border: 1px solid transparent;
+  animation: toast-in 0.2s ease-out both;
+}
+
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(1rem); }
+  to   { opacity: 1; transform: translateX(0);    }
+}
+
+.toast__icon {
+  flex-shrink: 0;
+  font-style: normal;
+}
+
+.toast--success {
+  background: rgba(0, 229, 195, 0.12);
+  border-color: rgba(0, 229, 195, 0.35);
+  color: #00e5c3;
+}
+
+.toast--warning {
+  background: rgba(255, 180, 0, 0.12);
+  border-color: rgba(255, 180, 0, 0.35);
+  color: #ffb400;
+}
+
+.toast--info {
+  background: rgba(120, 130, 200, 0.14);
+  border-color: rgba(120, 130, 200, 0.3);
+  color: #a0aadd;
+}
+
+.toast--error {
+  background: rgba(255, 77, 106, 0.12);
+  border-color: rgba(255, 77, 106, 0.35);
+  color: #ff4d6a;
+}
+
+/* ─────────────────────────────────────────────
+   Lobby — offline badge in player count heading
+   ───────────────────────────────────────────── */
+
+.player-offline-badge {
+  margin-left: 0.5rem;
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: #ffb400;
+  background: rgba(255, 180, 0, 0.1);
+  border: 1px solid rgba(255, 180, 0, 0.25);
+  border-radius: 4px;
+  padding: 0.1rem 0.45rem;
+  vertical-align: middle;
+}
+
+/* ─────────────────────────────────────────────
+   PlayerList — offline player row treatment
+   Add to your PlayerList component's styles, or
+   target .player-item directly if it exists.
+   ───────────────────────────────────────────── */
+
+/* Applied when PlayerList renders a player with isOnline === false.
+   Your PlayerList component needs to add this class conditionally —
+   see the note in the M2 summary below. */
+.player-item--offline {
+  opacity: 0.45;
+  filter: grayscale(0.4);
+}
+
+.player-item--offline .player-offline-tag {
+  display: inline-block;
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: #ffb400;
+  background: rgba(255, 180, 0, 0.1);
+  border: 1px solid rgba(255, 180, 0, 0.25);
+  border-radius: 3px;
+  padding: 0.08rem 0.35rem;
+  margin-left: 0.4rem;
+  vertical-align: middle;
+}
+
+/* ─────────────────────────────────────────────
+   Game — ReadyPanel offline sub-label
+   ───────────────────────────────────────────── */
+
+.ready-offline-note {
+  font-size: 0.78rem;
+  color: #ffb400;
+  opacity: 0.8;
+  margin: 0.25rem 0 0.75rem;
+  text-align: center;
+  letter-spacing: 0.02em;
+}
+
+/* ─────────────────────────────────────────────
+   Voting — offline tag on suspect cards
+   ───────────────────────────────────────────── */
+
+.suspect-tag--offline {
+  background: rgba(255, 180, 0, 0.12);
+  border: 1px solid rgba(255, 180, 0, 0.3);
+  color: #ffb400;
+  font-size: 0.65rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  border-radius: 3px;
+  padding: 0.08rem 0.3rem;
+}

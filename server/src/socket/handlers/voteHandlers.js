@@ -2,40 +2,29 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Socket.IO handlers for the discussion → voting → results pipeline.
 //
-//  Events handled:
-//    player:ready   — player signals they want to vote
-//    vote:submit    — player casts their vote(s)
-//
-//  Events emitted (to whole room unless noted):
-//    ready:update          — current ready count during discussion
-//    voting:start          — all players ready; voting phase begins
-//    vote:timer            — countdown tick every second
-//    round:result          — full result broadcast after voting closes
-//    round:next            — host prompt to start next round (if rounds remain)
-//    game:finished         — final leaderboard (if all rounds done)
-//    error                 → sender only
-//
 //  Phase flow:
 //    discussion
-//      └─ all ready (or host force) ──► voting (30s timer starts)
-//           └─ all voted OR timer expires ──► results ──► next/finished
+//      └─ all online players ready (offline = auto-ready) ──► voting (30s)
+//           └─ all online players voted OR timer expires ──► results ──► next/finished
 //
-//  M1.1 addition — auto-ready for disconnected players:
-//    A disconnected player cannot permanently block the discussion phase.
-//    Two mechanisms work together:
+//  Regression fix (post-M2 reconnect testing):
+//    state.totalPlayers (from roundState) now reflects the FULL round
+//    roster including reserved-but-offline seats (see emitRound.js fix).
+//    That number is correct for round_players row count and for display
+//    purposes showing "X / Y in this round" if ever needed — but it must
+//    NOT be used to decide when voting is "complete", because an offline
+//    player can never submit a vote and would block resolution forever
+//    until the 30s timer bails it out.
 //
-//    1. On player:ready — after adding the player to readyPlayers, we check
-//       whether all *online* players are ready (i.e. all players not currently
-//       in disconnectTimers).  If so, voting starts immediately.
+//    Fix: vote:submit's completion check now compares votes.size against
+//    the count of currently ONLINE players (live socket membership), not
+//    state.totalPlayers. This mirrors the existing player:ready logic,
+//    which already used online players correctly.
 //
-//    2. On disconnect — lobbyHandlers calls handleDisconnectDuringDiscussion
-//       (exported from this file) which adds the departing player to
-//       readyPlayers and re-runs the same check.  This covers the case where
-//       everyone else was already ready when the player dropped.
-//
-//    Voting phase is deliberately left alone: a disconnected player simply
-//    won't vote, and the existing 30-second timer already resolves the round
-//    without blocking.  Abstain/auto-vote logic will be handled in M3.
+//    ready:update broadcasts now also report the online count alongside
+//    readyCount, so the client's ReadyPanel pip count stays accurate even
+//    as players disconnect/reconnect across rounds — it no longer relies
+//    on a value computed once at round creation.
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
@@ -43,28 +32,15 @@ const { getRoundState, clearRoundState } = require('../roundState');
 const { tallyVotes, buildVoteBreakdown } = require('../../services/votingService');
 const { calculateDeltas, applyDeltas, fetchUpdatedScores } = require('../../services/scoringService');
 const { emitRound } = require('../utils/emitRound');
-const { disconnectTimers } = require('../disconnectTimers');
 
 const VOTE_DURATION_MS = 30_000;
 const VOTE_TICK_MS     = 1_000;
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  Helper: check whether all currently online players have readied up.
-//
-//  "Online" means: in the round AND not currently in the disconnectTimers map
-//  (i.e. not in their grace window right now).
-//
-//  We derive the online player set from state.totalPlayers minus whoever is
-//  offline, rather than storing a separate counter, keeping roundState clean.
-//
-//  @param {object} state      — current roundState entry
-//  @param {string} roomCode   — used to look up the round's player IDs
-//  @param {Set}    onlineIds  — player IDs currently online in this room
-//  @returns {boolean}
+//  "Online" = has a live socket joined to the room right now.
 // ─────────────────────────────────────────────────────────────────────────────
 function allOnlinePlayersReady(state, onlineIds) {
-  // Every online player must be in readyPlayers.
-  // Offline players (in disconnectTimers) are treated as auto-ready.
   for (const id of onlineIds) {
     if (!state.readyPlayers.has(id)) return false;
   }
@@ -73,10 +49,9 @@ function allOnlinePlayersReady(state, onlineIds) {
 
 /**
  * Derive the set of player IDs who are currently online for a given room.
- * "Online" = in the round's totalPlayers count AND not in disconnectTimers.
- *
- * We use the Socket.IO room to find connected sockets rather than a DB call,
- * keeping this path synchronous and free of extra queries.
+ * Always computed live from Socket.IO room membership — never cached —
+ * so it self-corrects across disconnects, reconnects, and round boundaries
+ * without any stale state to track.
  *
  * @param {import('socket.io').Server} io
  * @param {string} roomCode
@@ -117,20 +92,17 @@ function registerVoteHandlers(socket, io, pool) {
 
     state.readyPlayers.add(socket.data.playerId);
 
-    const readyCount   = state.readyPlayers.size;
-    const totalPlayers = state.totalPlayers;
+    const onlineIds    = await getOnlinePlayerIds(io, socket.data.roomCode);
+    const readyCount   = [...state.readyPlayers].filter(id => onlineIds.has(id)).length;
+    const totalPlayers = onlineIds.size;
 
     io.to(socket.data.roomCode).emit('ready:update', { readyCount, totalPlayers });
 
     console.log(
       `[vote] ${socket.data.nickname} ready in ${socket.data.roomCode} ` +
-      `(${readyCount}/${totalPlayers})`
+      `(${readyCount}/${totalPlayers} online)`
     );
 
-    // ── M1.1: check against online players only ──────────────────────
-    // If all currently connected players are ready (offline players are
-    // implicitly auto-ready), start voting immediately.
-    const onlineIds = await getOnlinePlayerIds(io, socket.data.roomCode);
     if (onlineIds.size > 0 && allOnlinePlayersReady(state, onlineIds)) {
       await startVotingPhase(io, pool, socket.data.roomCode, state);
     }
@@ -139,7 +111,7 @@ function registerVoteHandlers(socket, io, pool) {
 
   // ── round:start-next ─────────────────────────────────────────────────
   //
-  // Unchanged from before M1.
+  // Unchanged.
   socket.on('round:start-next', async () => {
     if (!socket.data.roomCode) {
       return socket.emit('error', { code: 'NOT_IN_ROOM', message: 'Not in a room.' });
@@ -202,9 +174,6 @@ function registerVoteHandlers(socket, io, pool) {
 
 
   // ── vote:submit ───────────────────────────────────────────────────────
-  //
-  // Unchanged from before M1.
-  // Disconnected players simply won't submit; the 30s timer handles resolution.
   socket.on('vote:submit', async ({ targetPlayerIds } = {}) => {
     if (!socket.data.roomCode) {
       return socket.emit('error', { code: 'NOT_IN_ROOM', message: 'Not in a room.' });
@@ -269,6 +238,11 @@ function registerVoteHandlers(socket, io, pool) {
       });
     }
 
+    // Validate targets are round participants. This now correctly includes
+    // players who are mid-grace-period (reserved seat), since emitRound's
+    // fix ensures they have a round_players row regardless of connection
+    // status. A reconnecting player who was offline at round creation can
+    // now be voted for, fixing "this player may not be present."
     const placeholders = targetIds.map(() => '?').join(', ');
     const [targetRows] = await pool.query(
       `SELECT rp.room_player_id AS playerId
@@ -298,12 +272,22 @@ function registerVoteHandlers(socket, io, pool) {
       if (dbErr.code !== 'ER_DUP_ENTRY') throw dbErr;
     }
 
+    // ── Fix: completion check uses ONLINE players, not state.totalPlayers ──
+    // state.totalPlayers is the round's full seat count (may include
+    // offline-but-reserved players who can never vote). Comparing against
+    // it would block resolution until the 30s timer bails out even when
+    // every reachable player has voted. Online players are the correct
+    // denominator for "has everyone who CAN vote, voted."
+    const onlineIds = await getOnlinePlayerIds(io, socket.data.roomCode);
+
     console.log(
       `[vote] ${socket.data.nickname} voted for [${targetIds.join(', ')}] ` +
-      `in ${socket.data.roomCode} (${state.votes.size}/${state.totalPlayers})`
+      `in ${socket.data.roomCode} (${state.votes.size}/${onlineIds.size} online)`
     );
 
-    if (state.votes.size >= state.totalPlayers) {
+    const onlineVoted = [...state.votes.keys()].filter(id => onlineIds.has(id)).length;
+
+    if (onlineIds.size > 0 && onlineVoted >= onlineIds.size) {
       if (state.voteTimer) {
         clearTimeout(state.voteTimer);
         state.voteTimer = null;
@@ -321,41 +305,65 @@ function registerVoteHandlers(socket, io, pool) {
 
 /**
  * Called by lobbyHandlers when a player disconnects during the discussion phase.
- *
  * Adds the departing player to readyPlayers (auto-ready) and checks whether
- * all remaining online players are now ready.  If so, voting starts.
- *
- * Safe to call regardless of current phase — the guard at the top exits early
- * if there is no active round or the phase is not 'discussion'.
+ * all remaining online players are now ready.
  *
  * @param {import('socket.io').Server} io
  * @param {import('mysql2/promise').Pool} pool
  * @param {string} roomCode
- * @param {number} playerId   — the player who just disconnected
- * @param {string} nickname   — for logging
+ * @param {number} playerId
+ * @param {string} nickname
  */
 async function handleDisconnectDuringDiscussion(io, pool, roomCode, playerId, nickname) {
   const state = getRoundState(roomCode);
   if (!state || state.phase !== 'discussion') return;
 
-  // Treat the disconnected player as ready
   state.readyPlayers.add(playerId);
 
-  const readyCount   = state.readyPlayers.size;
-  const totalPlayers = state.totalPlayers;
+  const onlineIds    = await getOnlinePlayerIds(io, roomCode);
+  const readyCount   = [...state.readyPlayers].filter(id => onlineIds.has(id)).length;
+  const totalPlayers = onlineIds.size;
 
   io.to(roomCode).emit('ready:update', { readyCount, totalPlayers });
 
   console.log(
     `[vote] ${nickname} auto-readied on disconnect in ${roomCode} ` +
-    `(${readyCount}/${totalPlayers})`
+    `(${readyCount}/${totalPlayers} online)`
   );
 
-  // Check if all remaining online players are now ready
-  const onlineIds = await getOnlinePlayerIds(io, roomCode);
   if (onlineIds.size > 0 && allOnlinePlayersReady(state, onlineIds)) {
     await startVotingPhase(io, pool, roomCode, state);
   }
+}
+
+/**
+ * Called by lobbyHandlers when a player reconnects.
+ *
+ * Re-broadcasts ready:update with the current online count so every
+ * client's ReadyPanel immediately reflects the corrected denominator,
+ * instead of waiting for the next player:ready event. This directly
+ * fixes "ready panel shows 4 instead of 5" after a reconnect.
+ *
+ * Safe to call regardless of phase — no-ops if there's no active round
+ * or the round isn't in the discussion phase.
+ *
+ * @param {import('socket.io').Server} io
+ * @param {string} roomCode
+ */
+async function handleReconnectDuringDiscussion(io, roomCode) {
+  const state = getRoundState(roomCode);
+  if (!state || state.phase !== 'discussion') return;
+
+  const onlineIds    = await getOnlinePlayerIds(io, roomCode);
+  const readyCount   = [...state.readyPlayers].filter(id => onlineIds.has(id)).length;
+  const totalPlayers = onlineIds.size;
+
+  io.to(roomCode).emit('ready:update', { readyCount, totalPlayers });
+
+  console.log(
+    `[vote] Ready count recalculated after reconnect in ${roomCode} ` +
+    `(${readyCount}/${totalPlayers} online)`
+  );
 }
 
 
@@ -549,4 +557,8 @@ async function resolveVoting(io, pool, roomCode, state) {
   }
 }
 
-module.exports = { registerVoteHandlers, handleDisconnectDuringDiscussion };
+module.exports = {
+  registerVoteHandlers,
+  handleDisconnectDuringDiscussion,
+  handleReconnectDuringDiscussion,
+};

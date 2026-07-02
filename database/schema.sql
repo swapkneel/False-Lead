@@ -339,7 +339,7 @@ INSERT INTO word_bank (word, hint, alternate_word, category, difficulty) VALUES
 ('Switzerland',  'Neutral',    'Austria',      'Countries', 'medium'),
 ('Iceland',      'Glaciers',   'Norway',       'Countries', 'medium'),
 ('Mexico',       'Spicy',      'Colombia',     'Countries', 'easy'),
-('Greece',       'Ancient',    'Italy',        'Countries', 'easy'),
+('Greece',       'Ancient',    'Rome',        'Countries', 'easy'),
 ('Thailand',     'Temples',    'Vietnam',      'Countries', 'medium'),
 ('New Zealand',  'Kiwi',       'Australia',    'Countries', 'medium'),
 
@@ -355,4 +355,5 @@ INSERT INTO word_bank (word, hint, alternate_word, category, difficulty) VALUES
 ('Tolerance',    'Margin',     NULL,           'Engineering', 'hard'),
 ('Hydraulics',   'Fluid power',NULL,           'Engineering', 'hard'),
 ('Alloy',        'Mixed metal','Composite',    'Engineering', 'medium'),
-('Load bearing', 'Support',    NULL,           'Engineering', 'medium');
+('Load bearing', 'Support',    NULL,           'Engineering', 'medium'),
+
