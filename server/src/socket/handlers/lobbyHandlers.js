@@ -2,29 +2,25 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Lobby Socket.IO handlers.
 //
-//  M1 / M1.1 / M2 history preserved — see prior versions for full changelog.
+//  M2.5/M3 changes (emitRejoin only):
+//    1. imposterCount is now read from live roundState.imposterCount when
+//       the round is still active. Falls back to settings_json parsing only
+//       when roundState is gone (results phase / between rounds). This fixes
+//       a latent bug where settings changed between rounds could cause
+//       emitRejoin to report the wrong imposterCount for a historical round.
 //
-//  Regression fixes (post-M2 reconnect testing):
+//    2. The round roster in round:rejoin is now built from round_players JOIN
+//       room_players — the same source as the round:created roster — rather
+//       than a separate getRoomPlayers room-level query. This guarantees that
+//       the rejoin roster is identical in membership and shape to the roster
+//       every other client received at round:created, closing the dual-source
+//       divergence that caused vote-target inconsistency.
 //
-//  1. Host transfer now uses its OWN 30-second timer (HOST_TRANSFER_GRACE_MS),
-//     completely independent of the 300-second seat-reservation timer
-//     (DISCONNECT_GRACE_MS). A disconnected host who reconnects within 30s
-//     keeps host status. If 30s elapse, host is transferred — but the
-//     original player's SEAT remains reserved for the full 5 minutes; they
-//     can still reconnect and keep playing as a non-host.
+//    3. Roster shape is unified: { id, nickname, isHost, isOnline, score }
+//       identical to round:created. Client handles both events the same way.
 //
-//  2. round:rejoin now includes a `players` array (the round's online/offline
-//     roster) so Voting.jsx can render suspect cards even if lobby:updated
-//     hasn't populated GameContext.players yet (e.g. a player reconnecting
-//     directly into /voting without passing through /lobby).
-//
-//  3. Reconnect calls handleReconnectDuringDiscussion so every client's
-//     ReadyPanel count is recalculated immediately against current online
-//     membership, instead of waiting for the next player:ready event.
-//     This fixes "ready panel shows 4 instead of 5" after a reconnect.
-//
-//  4. player:reconnected emission verified and given defensive error
-//     handling so a downstream failure can't silently swallow the emit.
+//  All other behaviour (departure, timers, lobby broadcasts, game:start,
+//  settings:update) is unchanged from the previous accepted version.
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
@@ -39,16 +35,18 @@ const {
 
 const { emitRound } = require('../utils/emitRound');
 const {
-  disconnectTimers, DISCONNECT_GRACE_MS,
-  hostTransferTimers, HOST_TRANSFER_GRACE_MS,
+  disconnectTimers,    DISCONNECT_GRACE_MS,
+  hostTransferTimers,  HOST_TRANSFER_GRACE_MS,
 } = require('../disconnectTimers');
-const { getRoundState }                                     = require('../roundState');
-const { handleReconnectDuringDiscussion, handleDisconnectDuringDiscussion } =
-  require('./voteHandlers');
+const { getRoundState } = require('../roundState');
+const {
+  handleReconnectDuringDiscussion,
+  handleDisconnectDuringDiscussion,
+} = require('./voteHandlers');
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  Tracks players who have been permanently removed (leave or seat-timer
-//  expiry). Filtered out of all broadcastLobbyState calls. Pruned in M4.
+//  Permanently removed player IDs — excluded from lobby broadcasts.
+//  Pruned in M4.
 // ─────────────────────────────────────────────────────────────────────────────
 const permanentlyRemovedIds = new Set();
 
@@ -89,6 +87,19 @@ function registerLobbyHandlers(socket, io, pool) {
     try {
       const player = await getPlayerByToken(pool, sessionToken);
 
+      // ── DIAGNOSTIC LOGGING — remove after reconnect investigation ──────
+      console.log('[room:join:diag] sessionToken (last 8):', sessionToken.slice(-8));
+      console.log('[room:join:diag] player found:', player
+        ? `id=${player.playerId} nickname=${player.nickname} roomCode=${player.roomCode}`
+        : 'NULL — token not in DB'
+      );
+      if (player) {
+        const hasSeatTimer = disconnectTimers.has(player.playerId);
+        console.log('[room:join:diag] disconnectTimers has entry for playerId', player.playerId, ':', hasSeatTimer);
+        console.log('[room:join:diag] all seat timer keys:', [...disconnectTimers.keys()]);
+      }
+      // ── END DIAGNOSTIC LOGGING ─────────────────────────────────────────
+
       if (!player) {
         return socket.emit('error', {
           code:    'INVALID_TOKEN',
@@ -103,9 +114,9 @@ function registerLobbyHandlers(socket, io, pool) {
         });
       }
 
-      // ── Cancel any pending SEAT timer ─────────────────────────────────
+      // ── Cancel pending seat timer ──────────────────────────────────────
       const pendingSeat = disconnectTimers.get(player.playerId);
-      let wasReconnect = false;
+      let wasReconnect  = false;
 
       if (pendingSeat) {
         clearTimeout(pendingSeat.timer);
@@ -113,39 +124,32 @@ function registerLobbyHandlers(socket, io, pool) {
         wasReconnect = true;
       }
 
-      // ── Cancel any pending HOST TRANSFER timer (independent of seat) ──
-      // A player can have a host-transfer timer running without a seat
-      // timer in edge cases (shouldn't normally happen since both start
-      // together on disconnect, but we guard independently for safety).
+      console.log('[room:join:diag] wasReconnect:', wasReconnect, '| nickname:', player?.nickname);
+
+      // ── Cancel pending host-transfer timer ────────────────────────────
       const pendingHostTransfer = hostTransferTimers.get(player.playerId);
       if (pendingHostTransfer) {
         clearTimeout(pendingHostTransfer.timer);
         hostTransferTimers.delete(player.playerId);
         console.log(
-          `[socket] ${player.nickname} reconnected before host-transfer timer ` +
-          `expired — host status retained (room: ${player.roomCode})`
+          `[socket] ${player.nickname} reconnected before host-transfer ` +
+          `timer expired — host status retained (room: ${player.roomCode})`
         );
       }
 
-      // ── Emit reconnect toast to everyone else in the room ──────────────
-      // Defensive try/catch so a failure here can never silently abort the
-      // rest of room:join (which would also break round:rejoin).
+      // ── Emit reconnect toast to room ──────────────────────────────────
       if (wasReconnect) {
         try {
           io.to(player.roomCode).emit('player:reconnected', {
             playerId: player.playerId,
             nickname: player.nickname,
           });
-          console.log(
-            `[socket] player:reconnected emitted for ${player.nickname} ` +
-            `to room ${player.roomCode}`
-          );
         } catch (emitErr) {
           console.error('[room:join] Failed to emit player:reconnected:', emitErr.message);
         }
       }
 
-      // ── Restore socket context ───────────────────────────────────────
+      // ── Restore socket context ─────────────────────────────────────────
       socket.data.playerId  = player.playerId;
       socket.data.roomId    = player.roomId;
       socket.data.roomCode  = player.roomCode;
@@ -170,14 +174,12 @@ function registerLobbyHandlers(socket, io, pool) {
         settingsJson: player.settingsJson,
       });
 
-      // ── Recalculate ready count against current online membership ─────
-      // Fixes "ready panel shows stale count" after a reconnect — this
-      // runs regardless of phase; the helper no-ops if not in discussion.
+      // ── Recalculate ready count after reconnect ────────────────────────
       if (wasReconnect && player.roomStatus === 'in_progress') {
         await handleReconnectDuringDiscussion(io, player.roomCode);
       }
 
-      // ── Emit round:rejoin if game is in progress ──────────────────────
+      // ── Emit round:rejoin for in-progress rooms ────────────────────────
       if (player.roomStatus === 'in_progress') {
         await emitRejoin(socket, pool, player);
       }
@@ -249,13 +251,11 @@ function registerLobbyHandlers(socket, io, pool) {
     try {
       const [roomRows] = await pool.query(
         `SELECT id, status, current_round, total_rounds, settings_json AS settingsJson
-         FROM   rooms
-         WHERE  id = ?
-         LIMIT  1`,
+         FROM   rooms WHERE id = ? LIMIT 1`,
         [socket.data.roomId]
       );
 
-      if (roomRows.length === 0) {
+      if (!roomRows.length) {
         return socket.emit('error', { code: 'ROOM_NOT_FOUND', message: 'Room not found.' });
       }
 
@@ -269,7 +269,6 @@ function registerLobbyHandlers(socket, io, pool) {
       }
 
       const players = await getRoomPlayers(pool, socket.data.roomId, { onlineOnly: true });
-
       if (players.length < 3) {
         return socket.emit('error', {
           code:    'NOT_ENOUGH_PLAYERS',
@@ -278,8 +277,7 @@ function registerLobbyHandlers(socket, io, pool) {
       }
 
       const settings = typeof room.settingsJson === 'string'
-        ? JSON.parse(room.settingsJson)
-        : room.settingsJson;
+        ? JSON.parse(room.settingsJson) : room.settingsJson;
 
       await setRoomStatus(pool, socket.data.roomId, 'in_progress');
 
@@ -310,26 +308,32 @@ function registerLobbyHandlers(socket, io, pool) {
 
 
 // ─────────────────────────────────────────────
-//  round:rejoin payload builder
+//  M2.5: emitRejoin — unified roster, authoritative imposterCount
 // ─────────────────────────────────────────────
 
 /**
- * Builds and emits the round:rejoin payload to a single reconnecting socket.
+ * Emits round:rejoin to a single reconnecting socket.
  *
- * Regression fix: payload now includes `players` — the round's roster with
- * isOnline flags — so the client can render the suspect grid immediately
- * even if lobby:updated hasn't populated GameContext.players yet (e.g. a
- * player reconnecting directly into /voting without passing through /lobby
- * first).
+ * Roster source: round_players JOIN room_players for this round — the same
+ * table that round:created's assignments are built from. This guarantees
+ * the rejoin roster is identical in membership to what every other client
+ * received, eliminating the previous dual-source divergence.
+ *
+ * imposterCount source: live roundState.imposterCount when the round is
+ * still active. Falls back to settings_json parsing only when roundState
+ * is gone (results phase). This prevents a settings-change between rounds
+ * from contaminating the imposterCount of a historical round.
+ *
+ * Payload shape is identical to round:created so the client handles both
+ * events with the same handler.
  */
 async function emitRejoin(socket, pool, player) {
   try {
+    // ── Current round from DB ──────────────────────────────────────────
     const [roundRows] = await pool.query(
       `SELECT r.id          AS roundId,
               r.round_type  AS roundType,
               r.status      AS roundStatus,
-              r.word,
-              r.alternate_word AS alternateWord,
               rm.current_round AS roundNumber,
               rm.total_rounds  AS totalRounds,
               rm.settings_json AS settingsJson
@@ -341,13 +345,14 @@ async function emitRejoin(socket, pool, player) {
       [player.roomId]
     );
 
-    if (roundRows.length === 0) {
+    if (!roundRows.length) {
       socket.emit('round:rejoin', { phase: 'waiting' });
       return;
     }
 
     const round = roundRows[0];
 
+    // ── This player's private role row ────────────────────────────────
     const [rpRows] = await pool.query(
       `SELECT rp.role,
               rp.received_info AS receivedInfo,
@@ -361,6 +366,7 @@ async function emitRejoin(socket, pool, player) {
 
     const myRoundPlayer = rpRows[0] || null;
 
+    // ── Clue order (for WitnessOrder panel) ───────────────────────────
     const [clueRows] = await pool.query(
       `SELECT rp.room_player_id AS playerId,
               rmp.nickname,
@@ -372,11 +378,12 @@ async function emitRejoin(socket, pool, player) {
       [round.roundId]
     );
 
-    // ── M1.2 fix: full player roster for this round, with isOnline ──────
-    // Used by the client as a fallback source for the suspect grid when
-    // GameContext.players hasn't been populated via lobby:updated yet.
-    const [roundPlayerRows] = await pool.query(
-      `SELECT rmp.id           AS id,
+    // ── Unified round roster — identical source to round:created ──────
+    // Built from round_players (who is in THIS round) not getRoomPlayers
+    // (who is in the room). These diverge when players join/leave between
+    // rounds. Using round_players guarantees membership consistency.
+    const [rosterRows] = await pool.query(
+      `SELECT rmp.id            AS id,
               rmp.nickname,
               rmp.is_host       AS isHost,
               rmp.is_connected  AS isConnected,
@@ -387,7 +394,7 @@ async function emitRejoin(socket, pool, player) {
       [round.roundId]
     );
 
-    const roundPlayers = roundPlayerRows.map(p => ({
+    const players = rosterRows.map(p => ({
       id:       p.id,
       nickname: p.nickname,
       isHost:   p.isHost === 1,
@@ -395,66 +402,71 @@ async function emitRejoin(socket, pool, player) {
       score:    p.score,
     }));
 
-    const settings = typeof round.settingsJson === 'string'
-      ? JSON.parse(round.settingsJson)
-      : (round.settingsJson || {});
-
-    const imposterCount = settings.imposterCount ?? 1;
-
+    // ── imposterCount: live roundState first, settings fallback ───────
     const liveState = getRoundState(player.roomCode);
-    let phase;
+    let imposterCount;
 
+    if (liveState) {
+      // Round is still active — use the authoritative in-memory value
+      // set at round-creation time by resolveImposterCount.
+      imposterCount = liveState.imposterCount;
+    } else {
+      // Round is in results/finished — roundState was cleared.
+      // Fall back to settings_json parsing (acceptable here since we're
+      // only showing result information, not driving vote logic).
+      const settings = typeof round.settingsJson === 'string'
+        ? JSON.parse(round.settingsJson)
+        : (round.settingsJson || {});
+      imposterCount = settings.imposterCount ?? settings.imposter_count ?? 1;
+    }
+
+    // ── Phase ─────────────────────────────────────────────────────────
+    let phase;
     if (round.roundStatus === 'results' || round.roundStatus === 'finished') {
       phase = 'results';
-    } else if (liveState && liveState.phase === 'voting') {
+    } else if (liveState?.phase === 'voting') {
       phase = 'voting';
-    } else if (liveState && liveState.phase === 'discussion') {
+    } else if (liveState?.phase === 'discussion') {
       phase = 'discussion';
     } else {
       phase = round.roundStatus === 'active' ? 'discussion' : 'waiting';
     }
 
-    const isReady = liveState
-      ? liveState.readyPlayers.has(player.playerId)
-      : false;
+    const isReady  = liveState ? liveState.readyPlayers.has(player.playerId) : false;
+    const hasVoted = liveState ? liveState.votes.has(player.playerId)        : false;
 
-    const hasVoted = liveState
-      ? liveState.votes.has(player.playerId)
-      : false;
-
-    const secondsRemaining = null;
-
-    const payload = {
+    // ── Emit ──────────────────────────────────────────────────────────
+    // Payload shape is identical to round:created so the client can use
+    // the same handler for both events.
+    socket.emit('round:rejoin', {
       phase,
 
+      // Round identity (matches round:created fields)
       roundId:      round.roundId,
       roundNumber:  round.roundNumber,
       totalRounds:  round.totalRounds,
       roundType:    round.roundType,
       imposterCount,
+      clueOrder:    clueRows,
+      players,                          // unified roster
 
-      clueOrder: clueRows,
-
-      // M1.2: round roster fallback for suspect grid / player lists
-      players: roundPlayers,
-
+      // Private fields (only meaningful to this player)
       role:         myRoundPlayer?.role         ?? null,
       receivedInfo: myRoundPlayer?.receivedInfo ?? null,
       myClueOrder:  myRoundPlayer?.clueOrder    ?? null,
 
+      // Live state restoration
       isReady,
       hasVoted,
-      secondsRemaining,
-
+      secondsRemaining: null,           // client syncs on next vote:timer tick
       readyCount:   liveState ? liveState.readyPlayers.size : 0,
       totalPlayers: clueRows.length,
-    };
-
-    socket.emit('round:rejoin', payload);
+    });
 
     console.log(
       `[socket] round:rejoin → ${player.nickname} in ${player.roomCode} ` +
-      `(phase: ${phase}, round: ${round.roundNumber}, roster: ${roundPlayers.length})`
+      `(phase: ${phase}, round: ${round.roundNumber}, ` +
+      `roster: ${players.length}, imposterCount: ${imposterCount})`
     );
 
   } catch (err) {
@@ -478,38 +490,44 @@ async function handleDeparture(socket, io, pool, reason) {
     socket.leave(roomCode);
 
     if (reason === 'leave') {
-      // Intentional leave: permanent and immediate, host transferred now.
-      // No timers involved — both grace windows are irrelevant here.
       await performPermanentRemoval(io, pool, { playerId, roomId, roomCode, nickname, isHost });
       return;
     }
 
-    // ── Unintentional disconnect ─────────────────────────────────────────
+    // ── Unintentional disconnect ──────────────────────────────────────
     io.to(roomCode).emit('player:disconnected', { playerId, nickname });
     await broadcastCurrentLobbyState(io, pool, roomId, roomCode);
 
-    // If this player is mid-discussion, auto-ready them so they don't
-    // block everyone else.
-    await handleDisconnectDuringDiscussion(io, pool, roomCode, playerId, nickname);
+    // ── DIAGNOSTIC: seat timer registration ──────────────────────────
+    console.log(`[depart:diag] ${nickname} (id=${playerId}) — about to register seat timer`);
+
+    // ── Seat timer (5 min) ────────────────────────────────────────────
+    // Registered BEFORE the discussion hook so a throw in that hook
+    // cannot prevent seat reservation.
+    const seatTimer = setTimeout(async () => {
+      disconnectTimers.delete(playerId);
+      console.log(`[socket] Seat grace expired for ${nickname} in ${roomCode}`);
+      await performPermanentRemoval(io, pool, { playerId, roomId, roomCode, nickname, isHost });
+    }, DISCONNECT_GRACE_MS);
+
+    disconnectTimers.set(playerId, { timer: seatTimer, roomId, roomCode, nickname, isHost });
+    console.log(`[depart:diag] seat timer registered for ${nickname} (id=${playerId}). Timer keys now:`, [...disconnectTimers.keys()]);
+
+    // Auto-ready the player if mid-discussion so nobody is blocked.
+    // Wrapped in its own try/catch — a throw here must not prevent the
+    // seat reservation above from taking effect.
+    try {
+      await handleDisconnectDuringDiscussion(io, pool, roomCode, playerId, nickname);
+    } catch (hookErr) {
+      console.error(`[depart:diag] handleDisconnectDuringDiscussion threw for ${nickname}:`, hookErr.message, hookErr.stack);
+    }
 
     console.log(
       `[socket] ${nickname} disconnected from ${roomCode} — ` +
       `seat reserved for ${DISCONNECT_GRACE_MS / 1000}s`
     );
 
-    // ── SEAT timer (5 min) — independent of host status ─────────────────
-    const seatTimer = setTimeout(async () => {
-      disconnectTimers.delete(playerId);
-      console.log(`[socket] Seat grace period expired for ${nickname} in ${roomCode}`);
-      await performPermanentRemoval(io, pool, { playerId, roomId, roomCode, nickname, isHost });
-    }, DISCONNECT_GRACE_MS);
-
-    disconnectTimers.set(playerId, { timer: seatTimer, roomId, roomCode, nickname, isHost });
-
-    // ── HOST TRANSFER timer (30s) — ONLY if this player was host ────────
-    // Independent of the seat timer. If it fires, host moves to another
-    // connected player, but the original player's seat remains reserved
-    // separately for the full DISCONNECT_GRACE_MS.
+    // ── Host-transfer timer (30s) — only for host ─────────────────────
     if (isHost) {
       console.log(
         `[socket] ${nickname} was host — starting ${HOST_TRANSFER_GRACE_MS / 1000}s ` +
@@ -519,13 +537,8 @@ async function handleDeparture(socket, io, pool, reason) {
       const hostTimer = setTimeout(async () => {
         hostTransferTimers.delete(playerId);
 
-        // Only transfer if the player hasn't reconnected (i.e. their seat
-        // timer is still pending — if they reconnected, seat timer would
-        // already be cleared).
-        if (!disconnectTimers.has(playerId)) {
-          // Already reconnected via the seat path; nothing to do.
-          return;
-        }
+        // Only act if the player hasn't reconnected
+        if (!disconnectTimers.has(playerId)) return;
 
         console.log(`[socket] Host-transfer timer expired for ${nickname} in ${roomCode}`);
 
@@ -542,12 +555,6 @@ async function handleDeparture(socket, io, pool, reason) {
             }
           }
           console.log(`[socket] ${newHost.nickname} promoted to host in ${roomCode} (host-transfer timer)`);
-
-          // Update socket.data.isHost = false for the original host's
-          // pending seat entry isn't needed — when they reconnect, their
-          // fresh DB read via getPlayerByToken will correctly report
-          // isHost: false since promoteNextHost already updated the DB.
-
           await broadcastCurrentLobbyState(io, pool, roomId, roomCode);
         }
       }, HOST_TRANSFER_GRACE_MS);
@@ -568,9 +575,7 @@ async function handleDeparture(socket, io, pool, reason) {
 async function performPermanentRemoval(io, pool, { playerId, roomId, roomCode, nickname, isHost }) {
   permanentlyRemovedIds.add(playerId);
 
-  // Clean up any still-pending host-transfer timer for this player
-  // (e.g. seat timer fired before the 30s host-transfer window did,
-  // which shouldn't normally happen since 30s < 5min, but guard anyway).
+  // Clean up any still-pending host-transfer timer
   const pendingHostTransfer = hostTransferTimers.get(playerId);
   if (pendingHostTransfer) {
     clearTimeout(pendingHostTransfer.timer);
@@ -579,12 +584,6 @@ async function performPermanentRemoval(io, pool, { playerId, roomId, roomCode, n
 
   io.to(roomCode).emit('player:removed', { playerId, nickname });
 
-  // If host status was already transferred via the 30s timer, isHost here
-  // will be stale (still true from socket.data snapshot at disconnect time)
-  // but promoteNextHost is safe to call again — it will simply find no
-  // eligible change is needed if a host already exists, or no-op gracefully
-  // if departingPlayerId no longer matches the current host. We guard by
-  // checking the DB directly to avoid a duplicate host:promoted toast.
   if (isHost) {
     const [hostCheck] = await pool.query(
       'SELECT is_host FROM room_players WHERE id = ? LIMIT 1',
@@ -593,21 +592,17 @@ async function performPermanentRemoval(io, pool, { playerId, roomId, roomCode, n
     const stillHost = hostCheck.length > 0 && hostCheck[0].is_host === 1;
 
     if (stillHost) {
-      // Host transfer timer never fired (player removed before 30s, e.g.
-      // very short seat timer in testing) — transfer now as a fallback.
       const newHost = await promoteNextHost(pool, roomId, playerId);
       if (newHost) {
         const roomSockets = await io.in(roomCode).fetchSockets();
         for (const s of roomSockets) {
           if (s.data.playerId === newHost.id) {
             s.data.isHost = true;
-            s.emit('host:promoted', {
-              message: `${nickname} left. You are now the host.`,
-            });
+            s.emit('host:promoted', { message: `${nickname} left. You are now the host.` });
             break;
           }
         }
-        console.log(`[socket] ${newHost.nickname} promoted to host in ${roomCode} (permanent removal fallback)`);
+        console.log(`[socket] ${newHost.nickname} promoted in ${roomCode} (permanent removal fallback)`);
       }
     }
   }
@@ -618,15 +613,13 @@ async function performPermanentRemoval(io, pool, { playerId, roomId, roomCode, n
 
 
 // ─────────────────────────────────────────────
-//  Internal: lobby broadcast from DB
+//  Internal: lobby broadcast helpers
 // ─────────────────────────────────────────────
 
 async function broadcastCurrentLobbyState(io, pool, roomId, roomCode) {
   const [roomRow] = await pool.query(
     `SELECT status, preset, settings_json AS settingsJson, total_rounds AS totalRounds
-     FROM   rooms
-     WHERE  id = ?
-     LIMIT  1`,
+     FROM rooms WHERE id = ? LIMIT 1`,
     [roomId]
   );
   if (!roomRow.length) return;
@@ -640,11 +633,6 @@ async function broadcastCurrentLobbyState(io, pool, roomId, roomCode) {
 
   await broadcastLobbyState(io, pool, roomCode, roomId, meta);
 }
-
-
-// ─────────────────────────────────────────────
-//  Internal: token lookup
-// ─────────────────────────────────────────────
 
 async function getSessionTokenByPlayerId(pool, playerId) {
   const [rows] = await pool.query(

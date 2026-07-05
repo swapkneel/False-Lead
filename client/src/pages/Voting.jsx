@@ -2,17 +2,18 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Voting Screen — "Submit Your Verdict"
 //
-//  Regression fix (post-M2 reconnect testing):
-//    round:rejoin now carries a `players` array (the round's roster with
-//    isOnline flags). Voting.jsx previously only read `players` from
-//    GameContext, which could be empty if the player reconnected directly
-//    into /voting without passing through /lobby first — resulting in an
-//    empty suspect grid. The rejoin handler now calls updateLobby with the
-//    rejoin payload's players as a fallback whenever it's non-empty, so the
-//    grid always has data to render regardless of how the player arrived.
+//  M2.5/M3 changes:
+//    - round:rejoin calls setRoundPlayers(data.players) using the unified
+//      roster payload — identical to what round:created sent at round start.
+//      No updateLobby fallback merge needed or used.
+//    - lobby:updated listener kept (but writes to lobbyPlayers via updateLobby,
+//      not to the round roster) so offline tags on suspect cards update live
+//      as players disconnect/reconnect during voting.
+//    - players (round roster from context) is the sole source for the suspect
+//      grid. Always populated by round:created before this screen is reached.
 //
-//  All pre-existing multi-vote behaviour, the room:join reconnect-guard fix,
-//  and the offline-tag rendering are preserved unchanged.
+//  The room:join reconnect guard (only on true disconnect) and all
+//  multi-vote logic are preserved unchanged.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState, useCallback } from 'react';
@@ -25,7 +26,6 @@ import { useToast, ToastContainer }          from '../components/Toast';
 
 function SuspectCard({ player, isSelected, isMe, isSubmitted, isDisabled, onSelect }) {
   const disabled = isMe || isSubmitted || isDisabled;
-
   return (
     <button
       className={[
@@ -38,11 +38,7 @@ function SuspectCard({ player, isSelected, isMe, isSubmitted, isDisabled, onSele
       onClick={() => !disabled && onSelect(player.id)}
       disabled={disabled}
       aria-pressed={isSelected}
-      aria-label={
-        isMe
-          ? `${player.nickname} (you — cannot vote for yourself)`
-          : `Vote for ${player.nickname}`
-      }
+      aria-label={isMe ? `${player.nickname} (you — cannot vote for yourself)` : `Vote for ${player.nickname}`}
     >
       <div className="suspect-card__inner">
         <span className="suspect-card__num" aria-hidden="true">
@@ -50,13 +46,9 @@ function SuspectCard({ player, isSelected, isMe, isSubmitted, isDisabled, onSele
         </span>
         <span className="suspect-card__name">{player.nickname}</span>
         <div className="suspect-card__tags">
-          {isMe && <span className="suspect-tag suspect-tag--you">YOU</span>}
-          {isSelected && !isMe && (
-            <span className="suspect-tag suspect-tag--selected">SELECTED</span>
-          )}
-          {player.isOnline === false && (
-            <span className="suspect-tag suspect-tag--offline">OFFLINE</span>
-          )}
+          {isMe       && <span className="suspect-tag suspect-tag--you">YOU</span>}
+          {isSelected && !isMe && <span className="suspect-tag suspect-tag--selected">SELECTED</span>}
+          {player.isOnline === false && <span className="suspect-tag suspect-tag--offline">OFFLINE</span>}
         </div>
       </div>
       {isSelected && <div className="suspect-card__bar" aria-hidden="true" />}
@@ -67,21 +59,14 @@ function SuspectCard({ player, isSelected, isMe, isSubmitted, isDisabled, onSele
 // ── CountdownTimer ───────────────────────────────────────────────────────────
 
 function CountdownTimer({ secondsLeft }) {
-  const TOTAL  = 30;
-  const pct    = Math.max(0, secondsLeft / TOTAL);
+  const pct    = Math.max(0, secondsLeft / 30);
   const urgent = secondsLeft <= 10;
-
   return (
     <div className={`vote-timer ${urgent ? 'vote-timer--urgent' : ''}`}>
       <svg className="vote-timer__ring" viewBox="0 0 48 48" aria-hidden="true">
         <circle cx="24" cy="24" r="20" className="vote-timer__track" />
-        <circle
-          cx="24" cy="24" r="20"
-          className="vote-timer__fill"
-          style={{
-            strokeDasharray:  `${2 * Math.PI * 20}`,
-            strokeDashoffset: `${2 * Math.PI * 20 * (1 - pct)}`,
-          }}
+        <circle cx="24" cy="24" r="20" className="vote-timer__fill"
+          style={{ strokeDasharray: `${2 * Math.PI * 20}`, strokeDashoffset: `${2 * Math.PI * 20 * (1 - pct)}` }}
         />
       </svg>
       <span className="vote-timer__label">{secondsLeft}</span>
@@ -95,70 +80,67 @@ export default function Voting() {
   const navigate = useNavigate();
   const {
     sessionToken, roomCode, playerId, roundData, players,
-    setPhase, setRoundData, setIsHost, updateLobby,
+    setPhase, setRoundData, setRoundPlayers, setIsHost, updateLobby,
   } = useGame();
 
   const { toasts, addToast } = useToast();
 
   const imposterCount = roundData?.imposterCount ?? 1;
 
-  const [selectedIds,  setSelectedIds]  = useState([]);
-  const [submitted,    setSubmitted]    = useState(false);
-  const [secondsLeft,  setSecondsLeft]  = useState(30);
-  const [socketError,  setSocketError]  = useState('');
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [submitted,   setSubmitted]   = useState(false);
+  const [secondsLeft, setSecondsLeft] = useState(30);
+  const [socketError, setSocketError] = useState('');
 
   const category    = roundData?.category    ?? '';
   const roundNumber = roundData?.roundNumber ?? '';
 
-  // ── Redirect guard ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!sessionToken || !roomCode) navigate('/', { replace: true });
   }, [sessionToken, roomCode, navigate]);
 
-  // ── Socket reconnect guard ─────────────────────────────────────────────
-  // Only emit room:join when the socket was actually disconnected.
+  // Only reconnect when socket was actually disconnected
   useEffect(() => {
     if (!sessionToken) return;
-
     if (!socket.connected) {
-      function joinRoom() {
-        socket.emit('room:join', { sessionToken });
-      }
+      function joinRoom() { socket.emit('room:join', { sessionToken }); }
       socket.connect();
       socket.once('connect', joinRoom);
-      return () => {
-        socket.off('connect', joinRoom);
-      };
+      return () => socket.off('connect', joinRoom);
     }
   }, [sessionToken]);
 
-  // ── Reset selection on round change ───────────────────────────────────
   useEffect(() => {
     setSelectedIds([]);
     setSubmitted(false);
     setSocketError('');
   }, [roundData?.roundId]);
 
-  // ── Socket listeners ───────────────────────────────────────────────────
   useEffect(() => {
     if (!sessionToken) return;
 
-    function onTimer(data) {
-      setSecondsLeft(data.secondsRemaining);
-    }
-
+    function onTimer(data)  { setSecondsLeft(data.secondsRemaining); }
     function onResult(data) {
       sessionStorage.setItem('lastRoundResult', JSON.stringify(data));
       setPhase('results');
       navigate('/result');
     }
+    function onError(err)   { setSocketError(err.message || 'Something went wrong.'); }
 
-    function onError(err) {
-      setSocketError(err.message || 'Something went wrong.');
+    // lobby:updated during voting: update lobbyPlayers only.
+    // Do NOT touch the round roster (players) here — setRoundPlayers accepts
+    // a value, not a callback, so passing a function corrupts state.players
+    // to a function object and causes players.map is not a function on the
+    // next render. isOnline on suspect cards is refreshed by the next
+    // round:created or round:rejoin event instead.
+    function onLobbyUpdated(data) {
+      updateLobby({ players: data.players, status: data.status });
     }
 
-    // Authoritative rejoin — only fires after a true reconnect.
     function onRoundRejoin(data) {
+      // Unified roster — same call as round:created
+      if (Array.isArray(data.players)) setRoundPlayers(data.players);
+
       setRoundData({
         roundId:       data.roundId,
         roundNumber:   data.roundNumber,
@@ -171,53 +153,25 @@ export default function Voting() {
         myClueOrder:   data.myClueOrder,
       });
 
-      // ── Fix: fallback player roster for the suspect grid ─────────────
-      // If the rejoin payload includes a player roster, merge it into
-      // context so the grid renders immediately even if lobby:updated
-      // hasn't arrived yet (e.g. reconnecting directly into /voting).
-      if (Array.isArray(data.players) && data.players.length > 0) {
-        updateLobby({ players: data.players });
-      }
-
       if (data.hasVoted) setSubmitted(true);
 
       switch (data.phase) {
-        case 'discussion':
-          setPhase('round');
-          navigate('/game', { replace: true });
-          break;
+        case 'discussion': setPhase('round');   navigate('/game',   { replace: true }); break;
         case 'results':
-        case 'waiting':
-          setPhase('results');
-          navigate('/result', { replace: true });
-          break;
-        case 'voting':
-        default:
-          break;
+        case 'waiting':    setPhase('results'); navigate('/result', { replace: true }); break;
+        default: break; // 'voting' — already on the right screen
       }
     }
 
     function onPlayerDisconnected({ nickname }) { addToast(`${nickname} disconnected`, 'warning'); }
-    function onPlayerReconnected({ nickname })  { addToast(`${nickname} reconnected`, 'success'); }
+    function onPlayerReconnected({ nickname })  { addToast(`${nickname} reconnected`,  'success'); }
     function onPlayerRemoved({ nickname })      { addToast(`${nickname} was removed from the room`, 'info'); }
-    function onHostPromoted(data) {
-      setIsHost(true);
-      addToast(data.message || 'You are now the host.', 'info');
-    }
-
-    // ── Keep player roster fresh during voting too ──────────────────────
-    // Voting.jsx previously never listened for lobby:updated at all.
-    // Without this, a disconnect/reconnect mid-vote would never update the
-    // offline tags on suspect cards or remove a permanently-removed player
-    // from the grid.
-    function onLobbyUpdated(data) {
-      updateLobby({ players: data.players, status: data.status });
-    }
+    function onHostPromoted(data) { setIsHost(true); addToast(data.message || 'You are now the host.', 'info'); }
 
     socket.on('vote:timer',          onTimer);
     socket.on('round:result',        onResult);
-    socket.on('round:rejoin',        onRoundRejoin);
     socket.on('lobby:updated',       onLobbyUpdated);
+    socket.on('round:rejoin',        onRoundRejoin);
     socket.on('player:disconnected', onPlayerDisconnected);
     socket.on('player:reconnected',  onPlayerReconnected);
     socket.on('player:removed',      onPlayerRemoved);
@@ -227,23 +181,21 @@ export default function Voting() {
     return () => {
       socket.off('vote:timer',          onTimer);
       socket.off('round:result',        onResult);
-      socket.off('round:rejoin',        onRoundRejoin);
       socket.off('lobby:updated',       onLobbyUpdated);
+      socket.off('round:rejoin',        onRoundRejoin);
       socket.off('player:disconnected', onPlayerDisconnected);
       socket.off('player:reconnected',  onPlayerReconnected);
       socket.off('player:removed',      onPlayerRemoved);
       socket.off('host:promoted',       onHostPromoted);
       socket.off('error',               onError);
     };
-  }, [sessionToken, setPhase, setRoundData, setIsHost, updateLobby, navigate, addToast]);
-
-  // ── Handlers ──────────────────────────────────────────────────────────
+  }, [sessionToken, setPhase, setRoundData, setRoundPlayers, setIsHost, updateLobby, navigate, addToast]);
 
   const handleSelect = useCallback((targetId) => {
     if (submitted) return;
     setSocketError('');
     setSelectedIds(prev => {
-      if (prev.includes(targetId)) return prev.filter(id => id !== targetId);
+      if (prev.includes(targetId))   return prev.filter(id => id !== targetId);
       if (prev.length >= imposterCount) return prev;
       return [...prev, targetId];
     });
@@ -255,8 +207,6 @@ export default function Voting() {
     socket.emit('vote:submit', { targetPlayerIds: selectedIds });
   }, [submitted, selectedIds, imposterCount]);
 
-  // ── Derived ────────────────────────────────────────────────────────────
-
   const selectionFull = selectedIds.length === imposterCount;
   const canSubmit     = selectionFull && !submitted;
 
@@ -264,17 +214,13 @@ export default function Voting() {
     ? `Select ${imposterCount} Suspect${imposterCount === 1 ? '' : 's'} First`
     : !selectionFull
       ? `Select ${imposterCount - selectedIds.length} More`
-      : imposterCount === 1
-        ? 'Submit Vote'
-        : 'Submit Votes';
+      : imposterCount === 1 ? 'Submit Vote' : 'Submit Votes';
 
   const instruction = submitted
     ? 'Vote submitted. Waiting for other agents…'
     : imposterCount === 1
       ? 'Select the suspect you believe is the impostor.'
       : `Select ${imposterCount} suspects you believe are the impostors. (${selectedIds.length}/${imposterCount} selected)`;
-
-  // ── Render ─────────────────────────────────────────────────────────────
 
   return (
     <div className="voting-page">
@@ -289,17 +235,13 @@ export default function Voting() {
       </div>
 
       <p className="voting-instruction">{instruction}</p>
-
-      {socketError && (
-        <p className="form-error" role="alert">{socketError}</p>
-      )}
+      {socketError && <p className="form-error" role="alert">{socketError}</p>}
 
       <div className="suspect-grid">
         {players.map(player => {
           const isSelected = selectedIds.includes(player.id);
           const isMe       = player.id === playerId;
           const isDisabled = !isSelected && selectionFull;
-
           return (
             <SuspectCard
               key={player.id}

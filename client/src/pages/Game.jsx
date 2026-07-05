@@ -2,22 +2,17 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Round Screen — "Opening the Case File"
 //
-//  M2 additions:
-//    - round:rejoin handler: restores roundData and ready state from server,
-//      navigates away if the server says the phase is voting/results/waiting.
-//    - Corrected socket reconnect guard: always emits room:join on mount
-//      (not only when socket is disconnected) so a tab that stayed open
-//      but lost its server session re-authenticates correctly.
-//    - ReadyPanel now counts only online players for its pip display.
-//    - Toasts for player:disconnected, player:reconnected, player:removed,
-//      host:promoted.
-//    - isReady initialised from round:rejoin payload.
-//
-//  Regression fix (post-M2):
-//    - similar_word_target added to ROLE_CONFIG mapped to the normal card
-//      appearance. The Similar Word target receives the alternate word and
-//      is meant to believe they are a normal agent — showing the grey
-//      DEFAULT_CONFIG card was incorrect.
+//  M2.5/M3 changes:
+//    - round:created now carries `players` (unified round roster). Handler
+//      calls setRoundPlayers(data.players) so the round roster in context
+//      is set at the start of every round for every client — not just
+//      reconnecting ones.
+//    - round:rejoin calls setRoundPlayers(data.players) with the same payload
+//      shape. No special-casing or fallback merging needed.
+//    - ReadyPanel derives onlinePlayers / offlinePlayers from context.players
+//      (the round roster), which is now always populated by round:created.
+//      The previous fallback to clueOrder.length is removed.
+//    - similar_word_target maps to normal card (deception mechanic, preserved).
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState, useCallback } from 'react';
@@ -27,62 +22,37 @@ import socket                                from '../services/socket';
 import { useToast, ToastContainer }          from '../components/Toast';
 
 // ── Role config ──────────────────────────────────────────────────────────────
-//
-// similar_word_target intentionally maps to the normal config.
-// That player receives the alternate word and should believe they are a
-// standard Field Agent — showing them a distinct card would break the
-// deception mechanic.
 
 const ROLE_CONFIG = {
   normal: {
-    label:     'Field Agent',
-    eyebrow:   'CLEARANCE LEVEL · STANDARD',
-    icon:      '🔍',
-    bg:        'rgba(0, 229, 195, 0.06)',
-    border:    '#00e5c3',
-    glow:      'rgba(0, 229, 195, 0.15)',
+    label: 'Field Agent', eyebrow: 'CLEARANCE LEVEL · STANDARD', icon: '🔍',
+    bg: 'rgba(0, 229, 195, 0.06)', border: '#00e5c3', glow: 'rgba(0, 229, 195, 0.15)',
     infoLabel: 'CLASSIFIED WORD',
-    hint:      'Your word is the truth. Find the one who does not know it.',
+    hint: 'Your word is the truth. Find the one who does not know it.',
   },
   imposter: {
-    label:     'Infiltrator',
-    eyebrow:   'CLEARANCE LEVEL · RESTRICTED',
-    icon:      '🎭',
-    bg:        'rgba(255, 77, 106, 0.06)',
-    border:    '#ff4d6a',
-    glow:      'rgba(255, 77, 106, 0.18)',
+    label: 'Infiltrator', eyebrow: 'CLEARANCE LEVEL · RESTRICTED', icon: '🎭',
+    bg: 'rgba(255, 77, 106, 0.06)', border: '#ff4d6a', glow: 'rgba(255, 77, 106, 0.18)',
     infoLabel: 'YOUR COVER CLUE',
-    hint:      'You have a clue — not the word. Blend in. Do not get caught.',
+    hint: 'You have a clue — not the word. Blend in. Do not get caught.',
   },
   reverse_spy_target: {
-    label:     'Informant',
-    eyebrow:   'CLEARANCE LEVEL · EYES ONLY',
-    icon:      '📋',
-    bg:        'rgba(160, 100, 255, 0.06)',
-    border:    '#a064ff',
-    glow:      'rgba(160, 100, 255, 0.18)',
+    label: 'Informant', eyebrow: 'CLEARANCE LEVEL · EYES ONLY', icon: '📋',
+    bg: 'rgba(160, 100, 255, 0.06)', border: '#a064ff', glow: 'rgba(160, 100, 255, 0.18)',
     infoLabel: 'CLASSIFIED WORD',
-    hint:      'You alone know the real word. The others are watching you.',
+    hint: 'You alone know the real word. The others are watching you.',
   },
 };
-
-// similar_word_target sees the normal Field Agent card — intentional deception.
+// similar_word_target sees the normal Field Agent card — intentional deception
 ROLE_CONFIG.similar_word_target = ROLE_CONFIG.normal;
 
 const DEFAULT_CONFIG = {
-  label:     'Agent',
-  eyebrow:   'CLEARANCE LEVEL · UNKNOWN',
-  icon:      '❓',
-  bg:        'rgba(123,128,153,0.08)',
-  border:    '#454961',
-  glow:      'transparent',
-  infoLabel: 'YOUR INFO',
-  hint:      '',
+  label: 'Agent', eyebrow: 'CLEARANCE LEVEL · UNKNOWN', icon: '❓',
+  bg: 'rgba(123,128,153,0.08)', border: '#454961', glow: 'transparent',
+  infoLabel: 'YOUR INFO', hint: '',
 };
 
-function getRoleConfig(role) {
-  return ROLE_CONFIG[role] || DEFAULT_CONFIG;
-}
+function getRoleConfig(role) { return ROLE_CONFIG[role] || DEFAULT_CONFIG; }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
 
@@ -106,14 +76,7 @@ function CaseFileHeader({ roundNumber, totalRounds }) {
 function EvidenceCard({ role, receivedInfo }) {
   const cfg = getRoleConfig(role);
   return (
-    <div
-      className="evidence-card"
-      style={{
-        '--card-border': cfg.border,
-        '--card-bg':     cfg.bg,
-        '--card-glow':   cfg.glow,
-      }}
-    >
+    <div className="evidence-card" style={{ '--card-border': cfg.border, '--card-bg': cfg.bg, '--card-glow': cfg.glow }}>
       <div className="evidence-card__strip">
         <span className="evidence-card__eyebrow">{cfg.eyebrow}</span>
         <span className="evidence-card__icon">{cfg.icon}</span>
@@ -127,9 +90,7 @@ function EvidenceCard({ role, receivedInfo }) {
         <p className="evidence-card__word">{receivedInfo}</p>
       </div>
       {cfg.hint && <p className="evidence-card__hint">{cfg.hint}</p>}
-      <div className="evidence-card__redact" aria-hidden="true">
-        <span /><span /><span />
-      </div>
+      <div className="evidence-card__redact" aria-hidden="true"><span /><span /><span /></div>
     </div>
   );
 }
@@ -157,7 +118,7 @@ function WitnessOrder({ clueOrder = [], myClueOrder }) {
   );
 }
 
-function ReadyPanel({ readyCount, onlinePlayers, offlinePlayers, onReady, isReady }) {
+function ReadyPanel({ readyCount, totalPlayers, onlinePlayers, offlinePlayers, onReady, isReady }) {
   return (
     <div className="ready-panel">
       <div className="ready-count-row">
@@ -166,9 +127,7 @@ function ReadyPanel({ readyCount, onlinePlayers, offlinePlayers, onReady, isRead
             <span key={i} className={`ready-pip ${i < readyCount ? 'ready-pip--lit' : ''}`} />
           ))}
         </span>
-        <span className="ready-count-label">
-          {readyCount} / {onlinePlayers} ready
-        </span>
+        <span className="ready-count-label">{readyCount} / {onlinePlayers} ready</span>
       </div>
 
       {offlinePlayers > 0 && (
@@ -195,7 +154,7 @@ export default function Game() {
   const navigate = useNavigate();
   const {
     sessionToken, roomCode, roundData, players,
-    setRoundData, setPhase, setIsHost,
+    setRoundData, setRoundPlayers, setPhase, setIsHost,
   } = useGame();
 
   const { toasts, addToast } = useToast();
@@ -204,53 +163,41 @@ export default function Game() {
   const [isReady,     setIsReady]     = useState(false);
   const [cardVisible, setCardVisible] = useState(false);
 
-  const onlinePlayers  = players.filter(p => p.isOnline !== false).length
-    || (roundData?.clueOrder?.length ?? 0);
+  // Round roster is now always populated by round:created before this screen
+  // renders, so no fallback to clueOrder.length is needed.
+  const onlinePlayers  = players.filter(p => p.isOnline !== false).length;
   const offlinePlayers = players.filter(p => p.isOnline === false).length;
 
-  // ── Redirect if no session ─────────────────────────────────────────────
   useEffect(() => {
     if (!sessionToken || !roomCode) navigate('/', { replace: true });
   }, [sessionToken, roomCode, navigate]);
 
-  // ── Socket reconnect guard ─────────────────────────────────────────────
-  //
-  // Only emit room:join when the socket was actually disconnected.
-  // Normal navigation from /lobby → /game arrives with the socket already
-  // connected — round:created and round:info already populate roundData,
-  // so emitting room:join here is unnecessary and would trigger a spurious
-  // round:rejoin that could race with those events.
-  //
-  // True reconnect (page refresh) — socket is disconnected — still connects
-  // and emits room:join, receiving round:rejoin to restore state.
+  // Only emit room:join when socket was actually disconnected (page refresh).
+  // Normal navigation from /lobby arrives with socket connected; emitting
+  // room:join unconditionally would trigger a spurious round:rejoin.
   useEffect(() => {
     if (!sessionToken) return;
-
     if (!socket.connected) {
-      function joinRoom() {
-        socket.emit('room:join', { sessionToken });
-      }
+      function joinRoom() { socket.emit('room:join', { sessionToken }); }
       socket.connect();
       socket.once('connect', joinRoom);
-      return () => {
-        socket.off('connect', joinRoom);
-      };
+      return () => socket.off('connect', joinRoom);
     }
-    // Socket already connected — normal navigation, no rejoin needed.
   }, [sessionToken]);
 
-  // ── Card entrance animation ────────────────────────────────────────────
   useEffect(() => {
     if (roundData?.role && roundData?.receivedInfo) {
       setTimeout(() => setCardVisible(true), 150);
     }
   }, [roundData?.roundId]);
 
-  // ── Socket event listeners ─────────────────────────────────────────────
   useEffect(() => {
     if (!sessionToken) return;
 
     function onRoundCreated(data) {
+      // Set the authoritative round roster for all clients at round boundary
+      if (Array.isArray(data.players)) setRoundPlayers(data.players);
+
       setRoundData({
         roundId:       data.roundId,
         roundNumber:   data.roundNumber,
@@ -260,27 +207,25 @@ export default function Game() {
         clueOrder:     data.clueOrder,
         imposterCount: data.imposterCount,
       });
+      // Reset ready state for the new round
+      setReadyCount(0);
+      setIsReady(false);
+      setCardVisible(false);
     }
 
     function onRoundInfo(data) {
-      setRoundData({
-        role:         data.role,
-        receivedInfo: data.receivedInfo,
-        myClueOrder:  data.clueOrder,
-      });
+      setRoundData({ role: data.role, receivedInfo: data.receivedInfo, myClueOrder: data.clueOrder });
       setTimeout(() => setCardVisible(true), 150);
     }
 
-    function onReadyUpdate(data) {
-      setReadyCount(data.readyCount);
-    }
+    function onReadyUpdate(data) { setReadyCount(data.readyCount); }
+    function onVotingStart()     { setPhase('voting'); navigate('/voting'); }
 
-    function onVotingStart() {
-      setPhase('voting');
-      navigate('/voting');
-    }
-
+    // round:rejoin — authoritative, same payload shape as round:created
     function onRoundRejoin(data) {
+      // Roster: same call as round:created handler
+      if (Array.isArray(data.players)) setRoundPlayers(data.players);
+
       setRoundData({
         roundId:       data.roundId,
         roundNumber:   data.roundNumber,
@@ -293,33 +238,22 @@ export default function Game() {
         myClueOrder:   data.myClueOrder,
       });
 
-      if (data.isReady) setIsReady(true);
-      if (data.readyCount != null) setReadyCount(data.readyCount);
-      if (data.role) setTimeout(() => setCardVisible(true), 150);
+      if (data.isReady)               setIsReady(true);
+      if (data.readyCount != null)    setReadyCount(data.readyCount);
+      if (data.role)                  setTimeout(() => setCardVisible(true), 150);
 
       switch (data.phase) {
-        case 'voting':
-          setPhase('voting');
-          navigate('/voting', { replace: true });
-          break;
+        case 'voting':  setPhase('voting');  navigate('/voting', { replace: true }); break;
         case 'results':
-        case 'waiting':
-          setPhase('results');
-          navigate('/result', { replace: true });
-          break;
-        case 'discussion':
-        default:
-          break;
+        case 'waiting': setPhase('results'); navigate('/result', { replace: true }); break;
+        default: break; // 'discussion' — already on the right screen
       }
     }
 
     function onPlayerDisconnected({ nickname }) { addToast(`${nickname} disconnected`, 'warning'); }
-    function onPlayerReconnected({ nickname })  { addToast(`${nickname} reconnected`, 'success'); }
+    function onPlayerReconnected({ nickname })  { addToast(`${nickname} reconnected`,  'success'); }
     function onPlayerRemoved({ nickname })      { addToast(`${nickname} was removed from the room`, 'info'); }
-    function onHostPromoted(data) {
-      setIsHost(true);
-      addToast(data.message || 'You are now the host.', 'info');
-    }
+    function onHostPromoted(data) { setIsHost(true); addToast(data.message || 'You are now the host.', 'info'); }
 
     socket.on('round:created',       onRoundCreated);
     socket.on('round:info',          onRoundInfo);
@@ -342,7 +276,7 @@ export default function Game() {
       socket.off('player:removed',      onPlayerRemoved);
       socket.off('host:promoted',       onHostPromoted);
     };
-  }, [sessionToken, setRoundData, setPhase, setIsHost, navigate, addToast]);
+  }, [sessionToken, setRoundData, setRoundPlayers, setPhase, setIsHost, navigate, addToast]);
 
   const handleReady = useCallback(() => {
     if (isReady) return;
@@ -392,6 +326,7 @@ export default function Game() {
       <div className="ready-panel-wrapper">
         <ReadyPanel
           readyCount={readyCount}
+          totalPlayers={players.length}
           onlinePlayers={onlinePlayers}
           offlinePlayers={offlinePlayers}
           onReady={handleReady}

@@ -2,62 +2,59 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Shared in-memory state for the active voting phase.
 //
-//  Why in-memory instead of the DB?
-//    Ready-state and vote-timer are transient. They exist only while a round
-//    is live and have no value after the round resolves. Storing them in MySQL
-//    would add latency to every ready/vote event with zero benefit.
-//    The DB is written once — when the round ends — in a single flush.
+//  M2.5/M3 addition — roundPlayerIds:
+//    A Set of every playerId that has a round_players row for this round.
+//    Set once at initRoundState time from the round's DB assignments and
+//    never mutated. Used as the single authoritative source for:
+//      - vote target eligibility  (is this target in the round?)
+//      - voter eligibility        (is this voter in the round?)
+//      - vote completion check    (online players ∩ roundPlayerIds)
+//      - ready-check denominator  (online players ∩ roundPlayerIds)
+//    Replaces ad-hoc DB queries and raw socket-room membership checks that
+//    previously gave different answers depending on call site.
 //
 //  Structure per room:
 //  roundState.get(roomCode) → {
-//    roundId:       number,
-//    readyPlayers:  Set<playerId>,
-//    votes:         Map<voterId, targetId[]>,   ← array, one entry per voter
-//    totalPlayers:  number,
-//    imposterCount: number,                     ← needed for vote validation + elimination
-//    voteTimer:     NodeJS.Timeout | null,
-//    tickInterval:  NodeJS.Timeout | null,
-//    phase:         'discussion' | 'voting' | 'results'
+//    roundId:         number,
+//    roundPlayerIds:  Set<playerId>,          ← M2.5/M3 addition
+//    readyPlayers:    Set<playerId>,
+//    votes:           Map<voterId, targetId[]>,
+//    totalPlayers:    number,                 ← roster size (= roundPlayerIds.size)
+//    imposterCount:   number,
+//    voteTimer:       NodeJS.Timeout | null,
+//    tickInterval:    NodeJS.Timeout | null,
+//    phase:           'discussion' | 'voting' | 'results'
 //  }
-//
-//  Lifecycle:
-//    Created  → when round:start fires (gameHandlers calls initRoundState)
-//    Updated  → as players mark ready and cast votes
-//    Deleted  → when round:result is broadcast (cleanup call)
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
-// One Map entry per active room. Keyed by roomCode (string).
 const roundState = new Map();
 
 /**
  * Initialise state for a new round.
- * Called by gameHandlers immediately after round creation.
  *
- * @param {string} roomCode
- * @param {number} roundId
- * @param {number} totalPlayers
- * @param {number} [imposterCount=1]
+ * @param {string}   roomCode
+ * @param {number}   roundId
+ * @param {number[]} playerIds      — all playerIds in round_players for this round
+ * @param {number}   [imposterCount=1]
  */
-function initRoundState(roomCode, roundId, totalPlayers, imposterCount = 1) {
-  // Clear any stale state from a previous round
+function initRoundState(roomCode, roundId, playerIds, imposterCount = 1) {
   clearRoundState(roomCode);
 
   roundState.set(roomCode, {
     roundId,
-    readyPlayers:  new Set(),
-    votes:         new Map(),   // Map<voterId, targetId[]>
-    totalPlayers,
-    imposterCount,              // how many targets each player must vote for
-    voteTimer:     null,
-    tickInterval:  null,
-    phase:         'discussion',
+    roundPlayerIds: new Set(playerIds),   // authoritative round membership
+    readyPlayers:   new Set(),
+    votes:          new Map(),
+    totalPlayers:   playerIds.length,     // convenience alias
+    imposterCount,
+    voteTimer:      null,
+    tickInterval:   null,
+    phase:          'discussion',
   });
 }
 
 /**
- * Returns the current round state for a room, or null if not found.
- *
  * @param {string} roomCode
  * @returns {object|null}
  */
@@ -66,9 +63,7 @@ function getRoundState(roomCode) {
 }
 
 /**
- * Clears state for a room (called after results are broadcast).
- * Cancels any running timers to prevent memory leaks.
- *
+ * Clears state for a room. Cancels any running timers.
  * @param {string} roomCode
  */
 function clearRoundState(roomCode) {

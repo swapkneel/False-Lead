@@ -2,16 +2,11 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Lobby page.
 //
-//  M2 additions:
-//    - Listens for player:disconnected, player:reconnected, player:removed,
-//      host:promoted and shows toasts for each.
-//    - PlayerList now receives players with isOnline flag — offline players
-//      are rendered with a visual indicator.
-//    - setIsHost called on host:promoted so the host controls appear
-//      immediately for the newly promoted player.
-//    - Start Game button counts only online players (players with isOnline).
+//  M2.5 change: reads lobbyPlayers (pre-game roster from lobby:updated)
+//  instead of players (in-game round roster). These are now separate fields
+//  in GameContext so a mid-game lobby:updated cannot corrupt the round roster.
 //
-//  All pre-existing behaviour is preserved unchanged.
+//  Everything else is identical to the previous accepted version.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from 'react';
@@ -25,77 +20,35 @@ import { useToast, ToastContainer } from '../components/Toast';
 export default function Lobby() {
   const navigate = useNavigate();
   const {
-    sessionToken,
-    roomCode,
-    isHost,
-    players,
+    sessionToken, roomCode, isHost,
+    lobbyPlayers,          // ← M2.5: was `players`
     roomStatus,
-    updateLobby,
-    setPhase,
-    setIsHost,
-    resetSession,
+    updateLobby, setPhase, setIsHost, resetSession,
   } = useGame();
 
   const { toasts, addToast } = useToast();
-
   const [socketError, setSocketError] = useState('');
   const [starting,    setStarting]    = useState(false);
 
-  // ── Redirect if no session ───────────────────────────────────────────────
   useEffect(() => {
-    if (!sessionToken || !roomCode) {
-      navigate('/', { replace: true });
-    }
+    if (!sessionToken || !roomCode) navigate('/', { replace: true });
   }, [sessionToken, roomCode, navigate]);
 
-  // ── Socket lifecycle ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!sessionToken || !roomCode) return;
 
-    if (!socket.connected) {
-      socket.connect();
-    }
+    if (!socket.connected) socket.connect();
 
-    function onConnect() {
-      socket.emit('room:join', { sessionToken });
-    }
+    function onConnect()          { socket.emit('room:join', { sessionToken }); }
+    function onLobbyUpdated(data) { updateLobby({ players: data.players, status: data.status }); }
+    function onGameStarting()     { setStarting(false); setPhase('round'); navigate('/game'); }
+    function onHostPromoted(data) { setIsHost(true); addToast(data.message || 'You are now the host.', 'info'); }
+    function onPlayerDisconnected({ nickname }) { addToast(`${nickname} disconnected`, 'warning'); }
+    function onPlayerReconnected({ nickname })  { addToast(`${nickname} reconnected`, 'success'); }
+    function onPlayerRemoved({ nickname })      { addToast(`${nickname} was removed from the room`, 'info'); }
+    function onError(err) { console.error('[lobby] socket error', err); setSocketError(err.message || 'Connection error. Please refresh.'); }
 
-    function onLobbyUpdated(data) {
-      updateLobby({ players: data.players, status: data.status });
-    }
-
-    function onGameStarting() {
-      setStarting(false);
-      setPhase('round');
-      navigate('/game');
-    }
-
-    function onHostPromoted(data) {
-      setIsHost(true);
-      addToast(data.message || 'You are now the host.', 'info');
-    }
-
-    // ── M2: reconnect/disconnect toasts ──────────────────────────────
-    function onPlayerDisconnected({ nickname }) {
-      addToast(`${nickname} disconnected`, 'warning');
-    }
-
-    function onPlayerReconnected({ nickname }) {
-      addToast(`${nickname} reconnected`, 'success');
-    }
-
-    function onPlayerRemoved({ nickname }) {
-      addToast(`${nickname} was removed from the room`, 'info');
-    }
-
-    function onError(err) {
-      console.error('[lobby] socket error', err);
-      setSocketError(err.message || 'Connection error. Please refresh.');
-    }
-
-    if (socket.connected) {
-      socket.emit('room:join', { sessionToken });
-    }
+    if (socket.connected) socket.emit('room:join', { sessionToken });
 
     socket.on('connect',            onConnect);
     socket.on('lobby:updated',      onLobbyUpdated);
@@ -118,16 +71,10 @@ export default function Lobby() {
     };
   }, [sessionToken, roomCode, updateLobby, setPhase, setIsHost, navigate, addToast]);
 
-  // ── Actions ──────────────────────────────────────────────────────────────
-
   function handleStartGame() {
     if (!isHost) return;
-    // Count only online players — offline seats are reserved but can't play
-    const onlineCount = players.filter(p => p.isOnline !== false).length;
-    if (onlineCount < 3) {
-      setSocketError('Need at least 3 connected players to start.');
-      return;
-    }
+    const onlineCount = lobbyPlayers.filter(p => p.isOnline !== false).length;
+    if (onlineCount < 3) { setSocketError('Need at least 3 connected players to start.'); return; }
     setSocketError('');
     setStarting(true);
     socket.emit('game:start');
@@ -139,51 +86,35 @@ export default function Lobby() {
     navigate('/');
   }
 
-  // ── Derived ──────────────────────────────────────────────────────────────
+  const onlineCount  = lobbyPlayers.filter(p => p.isOnline !== false).length;
+  const offlineCount = lobbyPlayers.filter(p => p.isOnline === false).length;
 
-  const onlineCount  = players.filter(p => p.isOnline !== false).length;
-  const offlineCount = players.filter(p => p.isOnline === false).length;
-
-  // ── Render ───────────────────────────────────────────────────────────────
   return (
     <div className="lobby-page">
       <ToastContainer toasts={toasts} />
 
       <header className="lobby-header">
-        <RoomInfo
-          roomCode={roomCode}
-          status={roomStatus || 'waiting'}
-          playerCount={onlineCount}
-        />
+        <RoomInfo roomCode={roomCode} status={roomStatus || 'waiting'} playerCount={onlineCount} />
       </header>
 
       <main className="lobby-main">
         <section className="lobby-players">
           <h2 className="section-title">
-            Players{' '}
-            <span className="player-count-badge">{onlineCount}</span>
+            Players <span className="player-count-badge">{onlineCount}</span>
             {offlineCount > 0 && (
-              <span className="player-offline-badge">
-                {offlineCount} offline
-              </span>
+              <span className="player-offline-badge">{offlineCount} offline</span>
             )}
           </h2>
-          {/* PlayerList receives players with isOnline — it renders the
-              offline indicator if isOnline === false */}
-          <PlayerList players={players} />
+          <PlayerList players={lobbyPlayers} />
         </section>
 
-        {socketError && (
-          <p className="form-error" role="alert">{socketError}</p>
-        )}
+        {socketError && <p className="form-error" role="alert">{socketError}</p>}
 
         <section className="lobby-actions">
           {isHost ? (
             <>
               <p className="lobby-host-hint">
-                {onlineCount < 3
-                  ? 'Waiting for at least 3 connected players…'
-                  : 'Everyone ready? Start the game.'}
+                {onlineCount < 3 ? 'Waiting for at least 3 connected players…' : 'Everyone ready? Start the game.'}
               </p>
               <button
                 className="btn btn--primary btn--full"
@@ -194,15 +125,10 @@ export default function Lobby() {
               </button>
             </>
           ) : (
-            <p className="lobby-waiting-hint">
-              Waiting for the host to start the game…
-            </p>
+            <p className="lobby-waiting-hint">Waiting for the host to start the game…</p>
           )}
 
-          <button
-            className="btn btn--ghost btn--full"
-            onClick={handleLeave}
-          >
+          <button className="btn btn--ghost btn--full" onClick={handleLeave}>
             Leave Room
           </button>
         </section>
