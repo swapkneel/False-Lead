@@ -1,12 +1,22 @@
 // client/src/pages/Lobby.jsx
 // ─────────────────────────────────────────────────────────────────────────────
-//  Lobby page.
+//  Lobby page — "Briefing Room."
 //
-//  M2.5 change: reads lobbyPlayers (pre-game roster from lobby:updated)
-//  instead of players (in-game round roster). These are now separate fields
-//  in GameContext so a mid-game lobby:updated cannot corrupt the round roster.
+//  Presentation pass: root wrapper now carries the shared `.screen-transition`
+//  class (see SHARED SCREEN TRANSITION in index.css) — same fade/slide/scale
+//  entrance used across every gameplay screen. No other change.
 //
-//  Everything else is identical to the previous accepted version.
+//  v2 fixes the host-view layout regression: the action zone is no longer
+//  position: fixed. It previously relied on a single hardcoded bottom
+//  padding value on .lobby-page to clear a fixed bar, but the host's action
+//  cluster (hint + Start Game + Leave) is taller than the non-host cluster
+//  (hint + Leave), so the fixed bar overlapped the roster for hosts. The
+//  page is now one flex column: a top group (room code hero + roster) and
+//  a bottom group pushed down by margin-top: auto, so the gap between them
+//  is real, safe negative space regardless of which cluster renders.
+//
+//  All socket wiring, state shape (lobbyPlayers from GameContext), and the
+//  start/leave handlers are unchanged from the previous version.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState } from 'react';
@@ -21,7 +31,7 @@ export default function Lobby() {
   const navigate = useNavigate();
   const {
     sessionToken, roomCode, isHost,
-    lobbyPlayers,          // ← M2.5: was `players`
+    lobbyPlayers,
     roomStatus,
     updateLobby, setPhase, setIsHost, resetSession,
   } = useGame();
@@ -90,49 +100,49 @@ export default function Lobby() {
   const offlineCount = lobbyPlayers.filter(p => p.isOnline === false).length;
 
   return (
-    <div className="lobby-page">
+    <div className="lobby-page screen-transition">
       <ToastContainer toasts={toasts} />
 
-      <header className="lobby-header">
+      <div className="lobby-top">
         <RoomInfo roomCode={roomCode} status={roomStatus || 'waiting'} playerCount={onlineCount} />
-      </header>
 
-      <main className="lobby-main">
-        <section className="lobby-players">
-          <h2 className="section-title">
-            Players <span className="player-count-badge">{onlineCount}</span>
+        <section className="lobby-roster">
+          <div className="lobby-roster__header">
+            <span className="lobby-roster__title">Investigators · {onlineCount}</span>
             {offlineCount > 0 && (
-              <span className="player-offline-badge">{offlineCount} offline</span>
+              <span className="lobby-roster__offline-note">{offlineCount} offline</span>
             )}
-          </h2>
+          </div>
+
           <PlayerList players={lobbyPlayers} />
         </section>
 
         {socketError && <p className="form-error" role="alert">{socketError}</p>}
+      </div>
 
-        <section className="lobby-actions">
-          {isHost ? (
-            <>
-              <p className="lobby-host-hint">
-                {onlineCount < 3 ? 'Waiting for at least 3 connected players…' : 'Everyone ready? Start the game.'}
-              </p>
-              <button
-                className="btn btn--primary btn--full"
-                onClick={handleStartGame}
-                disabled={starting || onlineCount < 3}
-              >
-                {starting ? 'Starting…' : 'Start Game'}
-              </button>
-            </>
-          ) : (
-            <p className="lobby-waiting-hint">Waiting for the host to start the game…</p>
-          )}
+      <div className="lobby-bottom">
+        {isHost ? (
+          <>
+            <p className="lobby-bottom__hint">
+              {onlineCount < 3 ? 'Waiting for at least 3 connected players…' : 'Everyone accounted for.'}
+            </p>
+            <button
+              className="btn-game"
+              onClick={handleStartGame}
+              disabled={starting || onlineCount < 3}
+            >
+              {starting ? 'Starting…' : 'Begin Investigation'}
+              {!starting && <span className="btn-game__arrow" aria-hidden="true">→</span>}
+            </button>
+          </>
+        ) : (
+          <p className="lobby-bottom__hint">Waiting for the host to begin…</p>
+        )}
 
-          <button className="btn btn--ghost btn--full" onClick={handleLeave}>
-            Leave Room
-          </button>
-        </section>
-      </main>
+        <button className="text-action" onClick={handleLeave}>
+          Leave Room
+        </button>
+      </div>
     </div>
   );
 }

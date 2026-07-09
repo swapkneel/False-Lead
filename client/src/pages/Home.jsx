@@ -1,7 +1,10 @@
 // client/src/pages/Home.jsx
 // ─────────────────────────────────────────────────────────────────────────────
-//  Home page. Two flows live here:
-//    1. Create Room — player enters nickname, server creates room, player is host
+//  Home page — Main Menu.
+//
+//  Two flows live here:
+//    1. Create Room — player enters nickname + settings, server creates room,
+//       player is host
 //    2. Join Room   — player enters nickname + room code, joins existing room
 //
 //  Both flows end by calling setSession() then navigating to /lobby.
@@ -10,22 +13,46 @@
 //  For "Create Room", the token is sent as hostSessionId; the server
 //  stores it and later uses it to identify the host.
 //  For "Join Room", the server generates and returns a new token.
+//
+//  Layout note: this is a menu, not a form-first page. The default view
+//  shows three ranked actions (Create / Join / Pass & Play). Choosing
+//  Create or Join moves into a focused step with a back button, rather
+//  than permanently showing a tab bar + dense settings form. All handler
+//  logic and state below is unchanged from the previous version — only
+//  the surrounding structure and controls changed.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useGame } from '../context/GameContext';
 import { createRoom, joinRoom } from '../services/api';
+import logoUrl from '../assets/logo.png';
 
-// ── Small helper: which tab is active ───────────────────────────────────────
-const TAB_CREATE = 'create';
-const TAB_JOIN   = 'join';
+// ── Which step is currently showing ─────────────────────────────────────────
+const VIEW_MENU   = 'menu';
+const VIEW_CREATE  = 'create';
+const VIEW_JOIN    = 'join';
+
+const IMPOSTER_OPTIONS = [
+  { value: 'auto', label: 'Auto' },
+  { value: '1',    label: '1' },
+  { value: '2',    label: '2' },
+  { value: '3',    label: '3' },
+];
+
+const ROUND_OPTIONS = [3, 5, 7, 10];
+
+const SPECIAL_ROUND_OPTIONS = [
+  { key: 'reverse_spy',  label: 'Reverse Spy' },
+  { key: 'similar_word', label: 'Similar Word' },
+  { key: 'chaos',        label: 'Chaos' },
+];
 
 export default function Home() {
   const navigate        = useNavigate();
   const { setSession }  = useGame();
 
-  const [activeTab, setActiveTab] = useState(TAB_CREATE);
+  const [view, setView] = useState(VIEW_MENU);
 
   // Shared form state
   const [nickname, setNickname]   = useState('');
@@ -33,17 +60,21 @@ export default function Home() {
   const [loading,  setLoading]    = useState(false);
   const [error,    setError]      = useState('');
   const [specialRounds, setSpecialRounds] = useState({
-  reverse_spy: true,
-  similar_word: true,
-  chaos: true,
-});
+    reverse_spy: true,
+    similar_word: true,
+    chaos: true,
+  });
 
-const [imposterCount, setImposterCount] = useState("auto");
+  const [imposterCount, setImposterCount] = useState('auto');
+  const [totalRounds, setTotalRounds]     = useState(3);
 
-const [totalRounds, setTotalRounds] = useState(3);
-
-  // Clear error whenever the player switches tabs or types
+  // Clear error whenever the player switches views or types
   function clearError() { setError(''); }
+
+  function goToMenu() {
+    setView(VIEW_MENU);
+    clearError();
+  }
 
   // ── Create Room ────────────────────────────────────────────────────────────
   async function handleCreate(e) {
@@ -59,15 +90,13 @@ const [totalRounds, setTotalRounds] = useState(3);
       const hostSessionId = crypto.randomUUID();
 
       const { roomCode: newCode } = await createRoom({
-  hostSessionId,
-
-  totalRounds,
-
-  settings: {
-  special_rounds: specialRounds,
-  imposter_count: imposterCount,
-},
-});
+        hostSessionId,
+        totalRounds,
+        settings: {
+          special_rounds: specialRounds,
+          imposter_count: imposterCount,
+        },
+      });
 
       // Immediately join the room so the host has a room_players row
       const { playerId, sessionToken } = await joinRoom({
@@ -132,134 +161,139 @@ const [totalRounds, setTotalRounds] = useState(3);
   return (
     <div className="home-page">
       <header className="home-header">
-        <h1 className="home-title">False Lead</h1>
+        <h1 className="home-logo">
+          <img
+            src={logoUrl}
+            alt="False Lead"
+            className="home-logo__img"
+            draggable="false"
+          />
+        </h1>
         <p className="home-subtitle">A social deduction party game</p>
       </header>
 
-      <main className="home-main">
-        {/* Tab switcher */}
-        <div className="tab-bar" role="tablist">
+      {/* ── Main menu — default view ──────────────────────────────────────── */}
+      {view === VIEW_MENU && (
+        <nav className="home-menu" aria-label="Main menu" key="menu">
           <button
-            role="tab"
-            aria-selected={activeTab === TAB_CREATE}
-            className={`tab-btn ${activeTab === TAB_CREATE ? 'tab-btn--active' : ''}`}
-            onClick={() => { setActiveTab(TAB_CREATE); clearError(); }}
+            type="button"
+            className="btn btn--primary btn--full home-menu-btn"
+            onClick={() => { setView(VIEW_CREATE); clearError(); }}
           >
             Create Room
           </button>
 
           <button
             type="button"
-            className="btn btn--ghost btn--full"
-            style={{ marginTop: '0.75rem' }}
-            onClick={() => navigate('/pass-and-play')}
-          >
-            Pass & Play
-          </button>
-          
-          <button
-            role="tab"
-            aria-selected={activeTab === TAB_JOIN}
-            className={`tab-btn ${activeTab === TAB_JOIN ? 'tab-btn--active' : ''}`}
-            onClick={() => { setActiveTab(TAB_JOIN); clearError(); }}
+            className="btn btn--ghost btn--full home-menu-btn"
+            onClick={() => { setView(VIEW_JOIN); clearError(); }}
           >
             Join Room
           </button>
-        </div>
 
-        {/* Create Room form */}
-        {activeTab === TAB_CREATE && (
+          <button
+            type="button"
+            className="home-menu-link"
+            onClick={() => navigate('/pass-and-play')}
+          >
+            Pass &amp; Play
+          </button>
+        </nav>
+      )}
+
+      {/* ── Create Room step ──────────────────────────────────────────────── */}
+      {view === VIEW_CREATE && (
+        <section className="home-step" key="create">
+          <div className="home-step__header">
+            <button
+              type="button"
+              className="home-back-btn"
+              onClick={goToMenu}
+              aria-label="Back to menu"
+            >
+              ‹
+            </button>
+            <h2 className="home-step__title">Create Room</h2>
+          </div>
+
           <form className="home-form" onSubmit={handleCreate} noValidate>
             <label className="field-label" htmlFor="create-nickname">
               Your nickname
             </label>
             <input
-  id="create-nickname"
-  className="field-input"
-  type="text"
-  placeholder="e.g. Swapnil"
-  maxLength={20}
-  value={nickname}
-  onChange={(e) => { setNickname(e.target.value); clearError(); }}
-  autoComplete="off"
-  autoFocus
-/>
+              id="create-nickname"
+              className="field-input"
+              type="text"
+              placeholder="e.g. Swapnil"
+              maxLength={20}
+              value={nickname}
+              onChange={(e) => { setNickname(e.target.value); clearError(); }}
+              autoComplete="off"
+              autoFocus
+            />
 
-<div style={{ marginTop: "1rem", marginBottom: "1rem" }}>
-  <p><strong>Imposters</strong></p>
+            <div className="settings-block">
+              <p className="settings-label">Imposters</p>
+              <div className="pill-group" role="radiogroup" aria-label="Imposter count">
+                {IMPOSTER_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={imposterCount === opt.value}
+                    className={`pill ${imposterCount === opt.value ? 'pill--active' : ''}`}
+                    onClick={() => setImposterCount(opt.value)}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-  <select
-    value={imposterCount}
-    onChange={(e) => setImposterCount(e.target.value)}
-  >
-    <option value="auto">Auto</option>
-    <option value="1">1 Imposter</option>
-    <option value="2">2 Imposters</option>
-    <option value="3">3 Imposters</option>
-  </select>
-</div>
+            <div className="settings-block">
+              <p className="settings-label">Number of rounds</p>
+              <div className="pill-group" role="radiogroup" aria-label="Number of rounds">
+                {ROUND_OPTIONS.map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    role="radio"
+                    aria-checked={totalRounds === n}
+                    className={`pill ${totalRounds === n ? 'pill--active' : ''}`}
+                    onClick={() => setTotalRounds(n)}
+                  >
+                    {n}
+                  </button>
+                ))}
+              </div>
+            </div>
 
-<div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
-  <p><strong>Number of Rounds</strong></p>
+            <div className="settings-block">
+              <p className="settings-label">Special rounds</p>
+              <div className="toggle-row">
+                {SPECIAL_ROUND_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.key}
+                    type="button"
+                    aria-pressed={specialRounds[opt.key]}
+                    className={`toggle-chip ${specialRounds[opt.key] ? 'toggle-chip--active' : ''}`}
+                    onClick={() =>
+                      setSpecialRounds((prev) => ({
+                        ...prev,
+                        [opt.key]: !prev[opt.key],
+                      }))
+                    }
+                  >
+                    <span className="toggle-chip__check" aria-hidden="true">
+                      {specialRounds[opt.key] ? '✓' : ''}
+                    </span>
+                    <span className="toggle-chip__label">{opt.label}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
 
-  <select
-    value={totalRounds}
-    onChange={(e) => setTotalRounds(Number(e.target.value))}
-  >
-    <option value={3}>3 Rounds</option>
-    <option value={5}>5 Rounds</option>
-    <option value={7}>7 Rounds</option>
-    <option value={10}>10 Rounds</option>
-  </select>
-</div>
-
-<div style={{ marginTop: '1rem', marginBottom: '1rem' }}>
-  <p><strong>Special Rounds</strong></p>
-
-  <label style={{ display: 'block' }}>
-    <input
-      type="checkbox"
-      checked={specialRounds.reverse_spy}
-      onChange={() =>
-        setSpecialRounds(prev => ({
-          ...prev,
-          reverse_spy: !prev.reverse_spy,
-        }))
-      }
-    />
-    {' '}Reverse Spy
-  </label>
-
-  <label style={{ display: 'block' }}>
-    <input
-      type="checkbox"
-      checked={specialRounds.similar_word}
-      onChange={() =>
-        setSpecialRounds(prev => ({
-          ...prev,
-          similar_word: !prev.similar_word,
-        }))
-      }
-    />
-    {' '}Similar Word
-  </label>
-
-  <label style={{ display: 'block' }}>
-    <input
-      type="checkbox"
-      checked={specialRounds.chaos}
-      onChange={() =>
-        setSpecialRounds(prev => ({
-          ...prev,
-          chaos: !prev.chaos,
-        }))
-      }
-    />
-    {' '}Chaos
-  </label>
-</div>
-
-{error && <p className="form-error" role="alert">{error}</p>}
+            {error && <p className="form-error" role="alert">{error}</p>}
 
             <button
               className="btn btn--primary btn--full"
@@ -269,10 +303,24 @@ const [totalRounds, setTotalRounds] = useState(3);
               {loading ? 'Creating…' : 'Create Room'}
             </button>
           </form>
-        )}
+        </section>
+      )}
 
-        {/* Join Room form */}
-        {activeTab === TAB_JOIN && (
+      {/* ── Join Room step ────────────────────────────────────────────────── */}
+      {view === VIEW_JOIN && (
+        <section className="home-step" key="join">
+          <div className="home-step__header">
+            <button
+              type="button"
+              className="home-back-btn"
+              onClick={goToMenu}
+              aria-label="Back to menu"
+            >
+              ‹
+            </button>
+            <h2 className="home-step__title">Join Room</h2>
+          </div>
+
           <form className="home-form" onSubmit={handleJoin} noValidate>
             <label className="field-label" htmlFor="join-nickname">
               Your nickname
@@ -314,8 +362,8 @@ const [totalRounds, setTotalRounds] = useState(3);
               {loading ? 'Joining…' : 'Join Room'}
             </button>
           </form>
-        )}
-      </main>
+        </section>
+      )}
     </div>
   );
 }

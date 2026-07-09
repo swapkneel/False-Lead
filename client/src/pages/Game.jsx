@@ -1,18 +1,19 @@
 // client/src/pages/Game.jsx
 // ─────────────────────────────────────────────────────────────────────────────
-//  Round Screen — "Opening the Case File"
+//  Round Screen — "The Case File" (Role Reveal)
 //
-//  M2.5/M3 changes:
-//    - round:created now carries `players` (unified round roster). Handler
-//      calls setRoundPlayers(data.players) so the round roster in context
-//      is set at the start of every round for every client — not just
-//      reconnecting ones.
-//    - round:rejoin calls setRoundPlayers(data.players) with the same payload
-//      shape. No special-casing or fallback merging needed.
-//    - ReadyPanel derives onlinePlayers / offlinePlayers from context.players
-//      (the round roster), which is now always populated by round:created.
-//      The previous fallback to clueOrder.length is removed.
-//    - similar_word_target maps to normal card (deception mechanic, preserved).
+//  Presentation pass:
+//    - Root wrapper now carries the shared `.screen-transition` class (see
+//      SHARED SCREEN TRANSITION in index.css) — same fade/slide/scale used
+//      across every gameplay screen.
+//    - The case file card's border fix (top strip → full restrained outline)
+//      is CSS-only, via `.case-file` in index.css — no JSX change needed here.
+//    - `CaseFootnote` (Discussion Order) reworked into a labeled section with
+//      a speaking-order chip row, instead of one run-on paragraph.
+//
+//  All state, effects, socket event handlers, and emitted events are
+//  byte-for-byte identical to the previous version — only JSX markup
+//  inside the sub-components changed.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useEffect, useState, useCallback } from 'react';
@@ -25,21 +26,21 @@ import { useToast, ToastContainer }          from '../components/Toast';
 
 const ROLE_CONFIG = {
   normal: {
-    label: 'Field Agent', eyebrow: 'CLEARANCE LEVEL · STANDARD', icon: '🔍',
-    bg: 'rgba(0, 229, 195, 0.06)', border: '#00e5c3', glow: 'rgba(0, 229, 195, 0.15)',
-    infoLabel: 'CLASSIFIED WORD',
+    label: 'Field Agent', eyebrow: 'Standard Clearance',
+    border: 'var(--brass)',
+    infoLabel: 'Your Word',
     hint: 'Your word is the truth. Find the one who does not know it.',
   },
   imposter: {
-    label: 'Infiltrator', eyebrow: 'CLEARANCE LEVEL · RESTRICTED', icon: '🎭',
-    bg: 'rgba(255, 77, 106, 0.06)', border: '#ff4d6a', glow: 'rgba(255, 77, 106, 0.18)',
-    infoLabel: 'YOUR COVER CLUE',
-    hint: 'You have a clue — not the word. Blend in. Do not get caught.',
+    label: 'Infiltrator', eyebrow: 'Restricted Clearance',
+    border: 'var(--oxblood)',
+    infoLabel: 'Your Cover Clue',
+    hint: 'You have a clue, not the word. Blend in. Do not get caught.',
   },
   reverse_spy_target: {
-    label: 'Informant', eyebrow: 'CLEARANCE LEVEL · EYES ONLY', icon: '📋',
-    bg: 'rgba(160, 100, 255, 0.06)', border: '#a064ff', glow: 'rgba(160, 100, 255, 0.18)',
-    infoLabel: 'CLASSIFIED WORD',
+    label: 'Informant', eyebrow: 'Eyes Only',
+    border: '#a064ff',
+    infoLabel: 'Your Word',
     hint: 'You alone know the real word. The others are watching you.',
   },
 };
@@ -47,104 +48,92 @@ const ROLE_CONFIG = {
 ROLE_CONFIG.similar_word_target = ROLE_CONFIG.normal;
 
 const DEFAULT_CONFIG = {
-  label: 'Agent', eyebrow: 'CLEARANCE LEVEL · UNKNOWN', icon: '❓',
-  bg: 'rgba(123,128,153,0.08)', border: '#454961', glow: 'transparent',
-  infoLabel: 'YOUR INFO', hint: '',
+  label: 'Agent', eyebrow: 'Unknown Clearance',
+  border: 'var(--text-faint)',
+  infoLabel: 'Your Info', hint: '',
 };
 
 function getRoleConfig(role) { return ROLE_CONFIG[role] || DEFAULT_CONFIG; }
 
 // ── Sub-components ───────────────────────────────────────────────────────────
 
-function CaseFileHeader({ roundNumber, totalRounds }) {
+function CaseFileTag({ roundNumber, totalRounds }) {
   return (
-    <div className="cf-header">
-      <div className="cf-stamp-row">
-        <span className="cf-case-label">CASE FILE</span>
-        <span className="cf-round-num">
-          {String(roundNumber).padStart(2, '0')} / {String(totalRounds).padStart(2, '0')}
-        </span>
-      </div>
-      <div className="cf-category-row">
-        <span className="cf-category-icon" aria-hidden="true">📁</span>
-        <span className="cf-category">CLASSIFIED</span>
-      </div>
+    <div className="cf-tag-row">
+      <span className="cf-tag">
+        CASE {String(roundNumber).padStart(2, '0')} / {String(totalRounds).padStart(2, '0')}
+      </span>
+      <span className="cf-tag__classified">Classified</span>
     </div>
   );
 }
 
-function EvidenceCard({ role, receivedInfo }) {
+function CaseFile({ role, receivedInfo }) {
   const cfg = getRoleConfig(role);
   return (
-    <div className="evidence-card" style={{ '--card-border': cfg.border, '--card-bg': cfg.bg, '--card-glow': cfg.glow }}>
-      <div className="evidence-card__strip">
-        <span className="evidence-card__eyebrow">{cfg.eyebrow}</span>
-        <span className="evidence-card__icon">{cfg.icon}</span>
-      </div>
-      <div className="evidence-card__role-row">
-        <span className="evidence-card__role-tag">ROLE</span>
-        <span className="evidence-card__role-name">{cfg.label}</span>
-      </div>
-      <div className="evidence-card__word-block">
-        <p className="evidence-card__word-label">{cfg.infoLabel}</p>
-        <p className="evidence-card__word">{receivedInfo}</p>
-      </div>
-      {cfg.hint && <p className="evidence-card__hint">{cfg.hint}</p>}
-      <div className="evidence-card__redact" aria-hidden="true"><span /><span /><span /></div>
+    <div className="case-file" style={{ '--card-border': cfg.border }}>
+      <span className="case-file__role-eyebrow">{cfg.eyebrow}</span>
+      <span className="case-file__role-name">{cfg.label}</span>
+      <span className="case-file__word-label">{cfg.infoLabel}</span>
+      <span className="case-file__word">{receivedInfo}</span>
+      {cfg.hint && <p className="case-file__hint">{cfg.hint}</p>}
     </div>
   );
 }
 
-function WitnessOrder({ clueOrder = [], myClueOrder }) {
+// Discussion Order — labeled supporting section with a step-chip speaking
+// order row, separated from the "no discussion yet" note by a hairline
+// divider. Gameplay logic (clueOrder / myClueOrder) is untouched — only the
+// presentation of that same data changed.
+function CaseFootnote({ clueOrder = [], myClueOrder }) {
   return (
-    <div className="witness-panel">
-      <div className="witness-panel__header">
-        <span className="witness-panel__icon" aria-hidden="true">📋</span>
-        <span className="witness-panel__title">WITNESS ORDER</span>
-      </div>
-      <ol className="witness-list">
-        {clueOrder.map((entry) => {
-          const isMe = entry.order === myClueOrder;
-          return (
-            <li key={entry.playerId} className={`witness-item ${isMe ? 'witness-item--me' : ''}`}>
-              <span className="witness-num">{String(entry.order).padStart(2, '0')}</span>
-              <span className="witness-name">{entry.nickname}</span>
-              {isMe && <span className="witness-you">YOU</span>}
-            </li>
-          );
-        })}
-      </ol>
+    <div className="cf-footnote">
+      {clueOrder.length > 0 && (
+        <>
+          <span className="cf-footnote__label">Speaking Order</span>
+          <div className="cf-footnote__order">
+            {clueOrder.map((entry, i) => (
+              <span key={`${entry.nickname}-${i}`}>
+                <span className={`cf-order-step ${entry.order === myClueOrder ? 'cf-order-step--me' : ''}`}>
+                  {entry.nickname}
+                </span>
+                {i < clueOrder.length - 1 && <span className="cf-order-arrow" aria-hidden="true">→</span>}
+              </span>
+            ))}
+          </div>
+        </>
+      )}
+      <p className="cf-footnote__note">No discussion until every clue has been given.</p>
     </div>
   );
 }
 
-function ReadyPanel({ readyCount, totalPlayers, onlinePlayers, offlinePlayers, onReady, isReady }) {
+function ReadyControl({ readyCount, onlinePlayers, offlinePlayers, onReady, isReady }) {
   return (
-    <div className="ready-panel">
-      <div className="ready-count-row">
-        <span className="ready-pips">
-          {Array.from({ length: onlinePlayers }).map((_, i) => (
-            <span key={i} className={`ready-pip ${i < readyCount ? 'ready-pip--lit' : ''}`} />
-          ))}
-        </span>
-        <span className="ready-count-label">{readyCount} / {onlinePlayers} ready</span>
-      </div>
+    <>
+      <span className="ready-pips">
+        {Array.from({ length: onlinePlayers }).map((_, i) => (
+          <span key={i} className={`ready-pip ${i < readyCount ? 'ready-pip--lit' : ''}`} />
+        ))}
+      </span>
+      <span className="ready-count-label">{readyCount} / {onlinePlayers} ready</span>
 
       {offlinePlayers > 0 && (
         <p className="ready-offline-note">
-          {offlinePlayers} player{offlinePlayers === 1 ? '' : 's'} offline — auto-readied
+          {offlinePlayers} offline player{offlinePlayers === 1 ? '' : 's'} auto-readied
         </p>
       )}
 
       <button
-        className={`btn btn--full ready-btn ${isReady ? 'ready-btn--done' : 'btn--primary'}`}
+        className={`btn-game ${isReady ? 'btn-game--done' : ''}`}
         onClick={onReady}
         disabled={isReady}
         aria-pressed={isReady}
       >
-        {isReady ? '✓ Ready to Vote' : 'Ready to Vote'}
+        {isReady ? '✓ Ready' : 'Ready to Vote'}
+        {!isReady && <span className="btn-game__arrow" aria-hidden="true">→</span>}
       </button>
-    </div>
+    </>
   );
 }
 
@@ -286,7 +275,7 @@ export default function Game() {
 
   if (!roundData?.roundId) {
     return (
-      <div className="game-page game-page--loading">
+      <div className="game-page game-page--loading screen-transition">
         <div className="loading-case">
           <div className="loading-folder" aria-hidden="true">📂</div>
           <p className="loading-text">RETRIEVING CASE FILE…</p>
@@ -299,34 +288,28 @@ export default function Game() {
   const { roundNumber, totalRounds, clueOrder, role, receivedInfo, myClueOrder } = roundData;
 
   return (
-    <div className="game-page">
+    <div className="game-page screen-transition">
       <ToastContainer toasts={toasts} />
 
-      <CaseFileHeader roundNumber={roundNumber} totalRounds={totalRounds} />
+      <CaseFileTag roundNumber={roundNumber} totalRounds={totalRounds} />
 
-      <div className={`evidence-card-wrapper ${cardVisible ? 'evidence-card-wrapper--visible' : ''}`}>
+      <div className={`case-file-wrapper ${cardVisible ? 'case-file-wrapper--visible' : ''}`}>
         {role ? (
-          <EvidenceCard role={role} receivedInfo={receivedInfo} />
+          <CaseFile role={role} receivedInfo={receivedInfo} />
         ) : (
-          <div className="evidence-card-skeleton">
+          <div className="case-file-skeleton">
             <p className="loading-text">DECRYPTING ASSIGNMENT…</p>
           </div>
         )}
       </div>
 
       {clueOrder?.length > 0 && (
-        <WitnessOrder clueOrder={clueOrder} myClueOrder={myClueOrder} />
+        <CaseFootnote clueOrder={clueOrder} myClueOrder={myClueOrder} />
       )}
 
-      <div className="interrogation-notice">
-        <span aria-hidden="true">🗣</span>
-        <p>State your clue when it is your turn. No discussion until all clues are given.</p>
-      </div>
-
-      <div className="ready-panel-wrapper">
-        <ReadyPanel
+      <div className="game-bottom">
+        <ReadyControl
           readyCount={readyCount}
-          totalPlayers={players.length}
           onlinePlayers={onlinePlayers}
           offlinePlayers={offlinePlayers}
           onReady={handleReady}

@@ -506,6 +506,34 @@ async function handleDeparture(socket, io, pool, reason) {
     // cannot prevent seat reservation.
     const seatTimer = setTimeout(async () => {
       disconnectTimers.delete(playerId);
+
+      // Guard: verify the player still belongs to this specific roomId before
+      // acting. Prevents stale player:removed toasts if the room finished,
+      // was abandoned, or the room code was reused by a new room before the
+      // timer expired.
+      try {
+        const [memberCheck] = await pool.query(
+          `SELECT rp.id
+           FROM   room_players rp
+           JOIN   rooms r ON r.id = rp.room_id
+           WHERE  rp.id      = ?
+           AND    rp.room_id = ?
+           AND    r.status  != 'finished'
+           LIMIT  1`,
+          [playerId, roomId]
+        );
+        if (!memberCheck.length) {
+          console.log(
+            `[socket] Seat timer fired for ${nickname} but room ${roomCode} ` +
+            `is finished or player has moved on — skipping removal`
+          );
+          return;
+        }
+      } catch (guardErr) {
+        console.error('[socket] Seat timer guard query failed:', guardErr.message);
+        return; // Fail safe: don't emit to a room we cannot verify
+      }
+
       console.log(`[socket] Seat grace expired for ${nickname} in ${roomCode}`);
       await performPermanentRemoval(io, pool, { playerId, roomId, roomCode, nickname, isHost });
     }, DISCONNECT_GRACE_MS);
@@ -580,6 +608,22 @@ async function performPermanentRemoval(io, pool, { playerId, roomId, roomCode, n
   if (pendingHostTransfer) {
     clearTimeout(pendingHostTransfer.timer);
     hostTransferTimers.delete(playerId);
+  }
+
+  // Second-line guard: check room is still active before broadcasting.
+  // The seat timer callback has its own guard, but performPermanentRemoval
+  // is also called directly on room:leave, so we verify here too.
+  // If the room is finished, there is nobody valid to receive the event.
+  const [roomStatusCheck] = await pool.query(
+    'SELECT status FROM rooms WHERE id = ? LIMIT 1',
+    [roomId]
+  );
+  if (!roomStatusCheck.length || roomStatusCheck[0].status === 'finished') {
+    console.log(
+      `[socket] Skipping player:removed for ${nickname} — ` +
+      `room ${roomCode} is finished or no longer exists`
+    );
+    return;
   }
 
   io.to(roomCode).emit('player:removed', { playerId, nickname });

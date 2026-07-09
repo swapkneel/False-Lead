@@ -2,7 +2,19 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Results Screen.
 //
-//  M2.5/M3 change:
+//  Presentation pass:
+//    - Root wrapper now carries the shared `.screen-transition` class (see
+//      SHARED SCREEN TRANSITION in index.css) so this screen enters with the
+//      same fade/slide/scale used across Lobby → Role Reveal → Discussion →
+//      Voting → Results → Next Round.
+//    - Bottom actions now use the shared `.btn-game` treatment (same button
+//      language as "Begin Investigation" / "Ready to Vote" / "Submit Verdict")
+//      instead of the generic `.btn`/`.btn--primary`/`.btn--ghost` classes.
+//    - VoteTally's previously inline-styled row now uses `.rs-tally-item` /
+//      `.rs-tally-name` / `.rs-tally-count` (defined in index.css) instead of
+//      style={} props.
+//
+//  M2.5/M3 change (unchanged from before):
 //    onRoundCreated now calls setRoundPlayers(data.players) so the round
 //    roster is set at the start of every new round even when the client is
 //    sitting on the result screen. Previously the roster was only updated
@@ -12,7 +24,8 @@
 //
 //    onRoundRejoin also calls setRoundPlayers with the unified roster.
 //
-//  All other behaviour is identical to the previous accepted version.
+//  All socket wiring, state shape, and handlers are otherwise identical to
+//  the previous accepted version.
 // ─────────────────────────────────────────────────────────────────────────────
 'use strict';
 
@@ -150,9 +163,9 @@ function VoteTally({ voteCounts = {}, scores = [] }) {
       <div className="rs-panel__header">VOTE TALLY</div>
       <ul className="rs-tally-list">
         {rows.map(({ playerId, count }) => (
-          <li key={playerId} className="rs-tally-item" style={{ display:'flex', justifyContent:'space-between', alignItems:'center', padding:'0.35rem 0', borderBottom:'1px solid rgba(255,255,255,0.06)' }}>
+          <li key={playerId} className="rs-tally-item">
             <span className="rs-tally-name">{nicknameMap[playerId] || `Player ${playerId}`}</span>
-            <span className="rs-tally-count" style={{ fontVariantNumeric:'tabular-nums', minWidth:'5rem', textAlign:'right', opacity:0.8 }}>{count} {count === 1 ? 'vote' : 'votes'}</span>
+            <span className="rs-tally-count">{count} {count === 1 ? 'vote' : 'votes'}</span>
           </li>
         ))}
       </ul>
@@ -235,7 +248,7 @@ export default function Result() {
   const navigate = useNavigate();
   const {
     sessionToken, roomCode, isHost, playerId,
-    setPhase, setRoundData, setRoundPlayers, setIsHost,  // ← added setRoundPlayers
+    setPhase, setRoundData, setRoundPlayers, setIsHost,
   } = useGame();
 
   const { toasts, addToast } = useToast();
@@ -370,7 +383,7 @@ export default function Result() {
 
   if (!result) {
     return (
-      <div className="rs-page rs-page--loading">
+      <div className="rs-page rs-page--loading screen-transition">
         <div className="loading-case">
           <div className="loading-folder">📋</div>
           <p className="loading-text">PROCESSING RESULTS…</p>
@@ -389,7 +402,7 @@ export default function Result() {
   const totalRounds = nextRound ? nextRound.totalRounds        : null;
 
   return (
-    <div className="rs-page">
+    <div className="rs-page screen-transition">
       <ToastContainer toasts={toasts} />
 
       <RoundStamp roundType={roundType} roundNumber={roundNumber} totalRounds={totalRounds} />
@@ -406,7 +419,7 @@ export default function Result() {
         {isGameOver ? (
           <div className="rs-game-over">
             <p className="rs-game-over__title">Game Over</p>
-            <button className="btn btn--ghost btn--full" onClick={() => {
+            <button className="btn-game btn-game--done" onClick={() => {
               sessionStorage.removeItem('gameFinished');
               sessionStorage.removeItem('nextRoundInfo');
               navigate('/');
@@ -415,7 +428,7 @@ export default function Result() {
             </button>
           </div>
         ) : nextRound && isHost ? (
-          <button className="btn btn--primary btn--full rs-next-btn" onClick={handleStartNext} disabled={starting}>
+          <button className="btn-game" onClick={handleStartNext} disabled={starting}>
             {starting ? 'Starting…' : `Start Round ${nextRound.nextRoundNumber} of ${nextRound.totalRounds}`}
           </button>
         ) : nextRound && !isHost ? (

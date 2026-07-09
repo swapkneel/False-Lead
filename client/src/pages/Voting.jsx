@@ -2,7 +2,21 @@
 // ─────────────────────────────────────────────────────────────────────────────
 //  Voting Screen — "Submit Your Verdict"
 //
-//  M2.5/M3 changes:
+//  Presentation pass: root wrapper now carries the shared `.screen-transition`
+//  class (see SHARED SCREEN TRANSITION in index.css) — same fade/slide/scale
+//  entrance used across every gameplay screen. The suspect grid also gets a
+//  staggered entrance (CSS-only, via `.suspect-grid .suspect-card` in
+//  index.css) matching the roster-row stagger on Lobby.
+//
+//  Presentation pass (earlier): suspect cards and the header now use the
+//  same layered-card language as the Lobby roster (real surface, hairline
+//  border, restrained shadow), with selection using oxblood/ember — the
+//  design system's reserved "selected suspect" color. The submit button
+//  is the same shared .btn-game used on Lobby/Role Reveal, pushed to the
+//  bottom of the flex column via margin-top: auto instead of a fixed
+//  overlay. No state, socket handlers, or vote logic changed below.
+//
+//  M2.5/M3 changes (unchanged from before):
 //    - round:rejoin calls setRoundPlayers(data.players) using the unified
 //      roster payload — identical to what round:created sent at round start.
 //      No updateLobby fallback merge needed or used.
@@ -223,7 +237,7 @@ export default function Voting() {
       : `Select ${imposterCount} suspects you believe are the impostors. (${selectedIds.length}/${imposterCount} selected)`;
 
   return (
-    <div className="voting-page">
+    <div className="voting-page screen-transition">
       <ToastContainer toasts={toasts} />
 
       <div className="voting-header">
@@ -257,9 +271,9 @@ export default function Voting() {
       </div>
 
       {!submitted && (
-        <div className="voting-submit-wrapper">
+        <div className="voting-bottom">
           <button
-            className="btn btn--primary btn--full voting-submit-btn"
+            className="btn-game"
             onClick={handleSubmit}
             disabled={!canSubmit}
           >

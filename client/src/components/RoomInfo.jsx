@@ -1,7 +1,8 @@
 // client/src/components/RoomInfo.jsx
 // ─────────────────────────────────────────────────────────────────────────────
-//  Displays the room code (large, copyable) and current room status.
-//  Used in the lobby header so players can share the code easily.
+//  Room code hero for the Briefing Room. This is the single largest element
+//  on the Lobby screen by design — copy logic and props are unchanged from
+//  the previous version, only the presentation.
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState } from 'react';
@@ -23,27 +24,24 @@ export default function RoomInfo({ roomCode, status, playerCount }) {
   }
 
   return (
-    <div className="room-info">
-      <p className="room-info-label">Room Code</p>
+    <div className="lobby-hero">
+      <p className="eyebrow lobby-hero__eyebrow">Briefing Room</p>
 
-      <div className="room-code-row">
-        <span className="room-code">{roomCode}</span>
+      <div className="lobby-hero__code-row">
+        <span className="lobby-hero__code">{roomCode}</span>
         <button
-          className="btn btn--ghost btn--sm"
+          className="lobby-hero__copy"
           onClick={handleCopy}
-          title="Copy room code"
           aria-label="Copy room code to clipboard"
         >
-          {copied ? 'Copied!' : 'Copy'}
+          {copied ? 'Copied' : 'Copy'}
         </button>
       </div>
 
-      <p className="room-info-meta">
-        <span className="room-status">{status}</span>
-        <span className="room-dot" aria-hidden="true"> · </span>
-        <span className="room-player-count">
-          {playerCount} {playerCount === 1 ? 'player' : 'players'}
-        </span>
+      <p className="lobby-hero__meta">
+        <span className="lobby-hero__meta-status">{status}</span>
+        <span className="lobby-hero__meta-dot" aria-hidden="true">·</span>
+        <span>{playerCount} {playerCount === 1 ? 'player' : 'players'}</span>
       </p>
     </div>
   );
