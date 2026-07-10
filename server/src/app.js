@@ -24,8 +24,11 @@ const app        = express();
 const httpServer = http.createServer(app); 
 
 app.use(cors({
-  origin: 'http://localhost:5173',
-  credentials: true
+  origin: [
+    'http://localhost:5173',
+    process.env.CLIENT_URL,
+  ].filter(Boolean),
+  credentials: true,
 }));
 // shared server — Express + Socket.IO
 
