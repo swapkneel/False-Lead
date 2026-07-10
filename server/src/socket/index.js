@@ -20,7 +20,10 @@ const { registerVoteHandlers }  = require('./handlers/voteHandlers');
 function initSocket(httpServer) {
   const io = new Server(httpServer, {
     cors: {
-      origin: process.env.CLIENT_ORIGIN || 'http://localhost:5173',
+      origin: [
+  'http://localhost:5173',
+  process.env.CLIENT_URL,
+].filter(Boolean),
       methods: ['GET', 'POST'],
     },
     pingTimeout:  25000,
