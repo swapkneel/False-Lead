@@ -242,7 +242,11 @@ function registerVoteHandlers(socket, io, pool) {
 
     if (onlineRoundIds.size > 0 && onlineVoted >= onlineRoundIds.size) {
       if (state.voteTimer) { clearTimeout(state.voteTimer); state.voteTimer = null; }
-      await resolveVoting(io, pool, socket.data.roomCode, state);
+      console.log(`[vote:submit] All players voted in ${socket.data.roomCode}, starting resolveVoting...`);
+
+await resolveVoting(io, pool, socket.data.roomCode, state);
+
+console.log(`[vote:submit] resolveVoting finished for ${socket.data.roomCode}`);
     }
   });
 }
@@ -318,6 +322,7 @@ async function startVotingPhase(io, pool, roomCode, state) {
 // ─────────────────────────────────────────────
 
 async function resolveVoting(io, pool, roomCode, state) {
+  console.log(`[resolveVoting] START room=${roomCode} round=${state.roundId}`);
   if (state.phase === 'results') return;
   state.phase = 'results';
 
@@ -325,7 +330,9 @@ async function resolveVoting(io, pool, roomCode, state) {
   if (state.tickInterval) clearInterval(state.tickInterval);
 
   try {
+    console.log("[resolveVoting] Query 1 - Fetching round...");
     const [roundRows] = await pool.query(
+      console.log("[resolveVoting] Query 1 complete.")
       `SELECT r.id, r.round_type, r.word, r.alternate_word,
               r.room_id, rm.current_round, rm.total_rounds
        FROM   rounds r JOIN rooms rm ON rm.id = r.room_id
@@ -340,7 +347,9 @@ async function resolveVoting(io, pool, roomCode, state) {
 
     const round = roundRows[0];
 
+    console.log("[resolveVoting] Query 2 - Fetching round players...");
     const [rpRows] = await pool.query(
+      console.log("[resolveVoting] Query 2 complete.")
       `SELECT rp.room_player_id AS playerId, rmp.nickname, rp.role, rp.received_info AS receivedInfo
        FROM   round_players rp
        JOIN   room_players  rmp ON rmp.id = rp.room_player_id
@@ -368,9 +377,15 @@ async function resolveVoting(io, pool, roomCode, state) {
       imposterCount: state.imposterCount,
     });
 
-    await applyDeltas(pool, deltas);
+    console.log("[resolveVoting] Applying score deltas...");
 
-    const updatedScores     = await fetchUpdatedScores(pool, rpRows.map(p => p.playerId));
+await applyDeltas(pool, deltas);
+
+console.log("[resolveVoting] Score deltas applied.");
+
+console.log("[resolveVoting] Fetching updated scores...");    
+const updatedScores     = await fetchUpdatedScores(pool, rpRows.map(p => p.playerId));
+console.log("[resolveVoting] Updated scores fetched.");
     const eliminatedPlayers = rpRows.filter(p => tallyResult.eliminatedPlayerIds.includes(p.playerId));
     const targetPlayers     = rpRows.filter(p =>
       ['imposter', 'reverse_spy_target', 'similar_word_target'].includes(p.role)
@@ -379,7 +394,9 @@ async function resolveVoting(io, pool, roomCode, state) {
       ['imposter', 'reverse_spy_target', 'similar_word_target'].includes(p.role)
     );
 
-    io.to(roomCode).emit('round:result', {
+    console.log("[resolveVoting] Emitting round:result...");
+    io.to(roomCode).emit('round:result',
+      console.log("[resolveVoting] round:result emitted."), {
       roundId:    state.roundId,
       roundType:  round.round_type,
       word:       round.word,
@@ -425,7 +442,7 @@ async function resolveVoting(io, pool, roomCode, state) {
     }
 
   } catch (err) {
-    console.error(`[resolveVoting] Error in ${roomCode}:`, err.message);
+    console.error("[resolveVoting] ERROR:", err);
     io.to(roomCode).emit('error', {
       code: 'SERVER_ERROR',
       message: 'An error occurred resolving the round. Please ask the host to restart.',

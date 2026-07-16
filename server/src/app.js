@@ -23,6 +23,8 @@ const { initSocket } = require('./socket/index');
 const app        = express();
 const httpServer = http.createServer(app); 
 
+console.log("CLIENT_URL =", process.env.CLIENT_URL);
+
 app.use(cors({
   origin: [
     'http://localhost:5173',
