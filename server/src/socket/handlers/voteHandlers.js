@@ -332,13 +332,13 @@ async function resolveVoting(io, pool, roomCode, state) {
   try {
     console.log("[resolveVoting] Query 1 - Fetching round...");
     const [roundRows] = await pool.query(
-      console.log("[resolveVoting] Query 1 complete.")
       `SELECT r.id, r.round_type, r.word, r.alternate_word,
               r.room_id, rm.current_round, rm.total_rounds
        FROM   rounds r JOIN rooms rm ON rm.id = r.room_id
        WHERE  r.id = ? LIMIT 1`,
       [state.roundId]
     );
+    console.log("[resolveVoting] Query 1 complete.");
 
     if (!roundRows.length) {
       console.error(`[resolveVoting] Round ${state.roundId} not found`);
@@ -349,13 +349,13 @@ async function resolveVoting(io, pool, roomCode, state) {
 
     console.log("[resolveVoting] Query 2 - Fetching round players...");
     const [rpRows] = await pool.query(
-      console.log("[resolveVoting] Query 2 complete.")
       `SELECT rp.room_player_id AS playerId, rmp.nickname, rp.role, rp.received_info AS receivedInfo
        FROM   round_players rp
        JOIN   room_players  rmp ON rmp.id = rp.room_player_id
        WHERE  rp.round_id = ?`,
       [state.roundId]
     );
+    console.log("[resolveVoting] Query 2 complete.");
 
     const tallyResult   = tallyVotes(state.votes, rpRows, state.imposterCount);
     const voteBreakdown = buildVoteBreakdown(state.votes, rpRows);
@@ -395,8 +395,7 @@ console.log("[resolveVoting] Updated scores fetched.");
     );
 
     console.log("[resolveVoting] Emitting round:result...");
-    io.to(roomCode).emit('round:result',
-      console.log("[resolveVoting] round:result emitted."), {
+    io.to(roomCode).emit('round:result', {
       roundId:    state.roundId,
       roundType:  round.round_type,
       word:       round.word,
@@ -421,6 +420,7 @@ console.log("[resolveVoting] Updated scores fetched.");
       scoreDeltas: deltas.reduce((acc, d) => { acc[d.playerId] = d.delta; return acc; }, {}),
       scores:      updatedScores,
     });
+    console.log("[resolveVoting] round:result emitted.");
 
     console.log(
       `[vote] Round ${state.roundId} resolved in ${roomCode} — ` +
