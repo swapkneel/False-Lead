@@ -130,4 +130,5 @@ if (import.meta.env.DEV) {
   socket.on('error', (err) => console.error('[socket] error', err));
 }
 
+window.socket = socket;
 export default socket;
