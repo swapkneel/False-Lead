@@ -46,7 +46,7 @@ const socket = io(SOCKET_URL, {
   reconnectionDelay: 1000,
 });
 
-// ── Persistent reconnect handler ─────────────────────────────────────────────
+// ── Persistent reconnect handler (UNCHANGED) ─────────────────────────────────
 //
 // Emits room:join after every successful connection — both the initial connect
 // and any subsequent automatic reconnect (e.g. DevTools Offline→Online, mobile
@@ -72,7 +72,49 @@ socket.on('connect', () => {
   }
 });
 
-// ── Dev logging ─────────────────────────────────────────────────────────────
+// ── Connection lifecycle logging (ALWAYS ON — runs in production too) ───────
+//
+// This used to live entirely inside `if (import.meta.env.DEV)`, which meant
+// there was zero visibility into socket lifecycle behavior in production.
+// Since Railway/Vercel's proxy layer behaves very differently from raw
+// localhost websockets (idle timeouts, ping/pong heartbeat windows, transport
+// upgrades), and since a blocking stretch of server-side work can cause the
+// Socket.IO heartbeat to miss its window and force a disconnect/reconnect,
+// these logs are essential for diagnosing "client never got the event" bugs
+// in the deployed build.
+//
+// connect / disconnect / connect_error are Socket instance events → socket.on(...)
+// reconnect_attempt / reconnect / reconnect_error / reconnect_failed are
+// Manager-level events → must be read via socket.io.on(...), not socket.on(...).
+socket.on('connect', () => {
+  console.log('[socket] connect', socket.id, new Date().toISOString());
+});
+
+socket.on('disconnect', (reason) => {
+  console.log('[socket] disconnect', reason, new Date().toISOString());
+});
+
+socket.on('connect_error', (err) => {
+  console.log('[socket] connect_error', err?.message || err, new Date().toISOString());
+});
+
+socket.io.on('reconnect_attempt', (attempt) => {
+  console.log('[socket] reconnect_attempt', attempt, new Date().toISOString());
+});
+
+socket.io.on('reconnect', (attempt) => {
+  console.log('[socket] reconnect', attempt, new Date().toISOString());
+});
+
+socket.io.on('reconnect_error', (err) => {
+  console.log('[socket] reconnect_error', err?.message || err, new Date().toISOString());
+});
+
+socket.io.on('reconnect_failed', () => {
+  console.log('[socket] reconnect_failed', new Date().toISOString());
+});
+
+// ── Dev-only verbose logging ─────────────────────────────────────────────────
 if (import.meta.env.DEV) {
   socket.onAny((event, ...args) => {
     console.log(`[socket ←] ${event}`, args);
@@ -85,9 +127,7 @@ if (import.meta.env.DEV) {
     }
   });
 
-  socket.on('connect',    () => console.log('[socket] connected', socket.id));
-  socket.on('disconnect', (reason) => console.log('[socket] disconnected', reason));
-  socket.on('error',      (err)    => console.error('[socket] error', err));
+  socket.on('error', (err) => console.error('[socket] error', err));
 }
 
 export default socket;
