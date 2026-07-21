@@ -55,15 +55,15 @@ A real-time multiplayer social deduction game inspired by games like Spyfall and
 
 ## 📸 Screenshots
 
-> Add gameplay screenshots here.
+<img width="436" height="328" alt="image" src="https://github.com/user-attachments/assets/f96caad9-16a0-4e05-a516-8c2afaef064e" />
+<img width="299" height="452" alt="image" src="https://github.com/user-attachments/assets/0290956e-b1d2-43ac-af4f-af9dc707c7ba" />
+<img width="330" height="455" alt="image" src="https://github.com/user-attachments/assets/9a3d9b7d-106d-4002-b5c9-65a1ec924198" />
+<img width="311" height="464" alt="image" src="https://github.com/user-attachments/assets/21bcc401-13d7-43e6-ad0f-204afb7b8fe4" />
+<img width="285" height="467" alt="image" src="https://github.com/user-attachments/assets/c48a463f-f999-4dcb-9fe6-94cfa0982656" />
+<img width="308" height="467" alt="image" src="https://github.com/user-attachments/assets/6bed0c42-5710-4db7-90d9-040135ebf04f" />
 
-- Home Page
-- Lobby
-- Category Voting
-- Discussion Phase
-- Voting Phase
-- Results Screen
-- Final Scoreboard
+
+
 
 ---
 
