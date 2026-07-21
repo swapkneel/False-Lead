@@ -46,7 +46,7 @@ const socket = io(SOCKET_URL, {
   reconnectionDelay: 1000,
 });
 
-// ── Persistent reconnect handler (UNCHANGED) ─────────────────────────────────
+// ── Persistent reconnect handler ─────────────────────────────────────────────
 //
 // Emits room:join after every successful connection — both the initial connect
 // and any subsequent automatic reconnect (e.g. DevTools Offline→Online, mobile
@@ -72,63 +72,53 @@ socket.on('connect', () => {
   }
 });
 
-// ── Connection lifecycle logging (ALWAYS ON — runs in production too) ───────
+// ── Persistent round:next / game:finished cache (THE FIX) ────────────────────
 //
-// This used to live entirely inside `if (import.meta.env.DEV)`, which meant
-// there was zero visibility into socket lifecycle behavior in production.
-// Since Railway/Vercel's proxy layer behaves very differently from raw
-// localhost websockets (idle timeouts, ping/pong heartbeat windows, transport
-// upgrades), and since a blocking stretch of server-side work can cause the
-// Socket.IO heartbeat to miss its window and force a disconnect/reconnect,
-// these logs are essential for diagnosing "client never got the event" bugs
-// in the deployed build.
+// ROOT CAUSE: round:result and round:next are emitted back-to-back by the
+// server with no I/O in between (see resolveVoting() — clearRoundState() and
+// the round:next emit happen synchronously right after round:result). On the
+// client, round:result triggers navigate('/result') from Voting.jsx. Only
+// Result.jsx subscribes to round:next, and it only does so after it mounts.
+// If round:next arrives before Result.jsx finishes mounting and running its
+// effect, there is NO listener registered for it at that instant — Socket.IO
+// dispatches the event to zero handlers and it is gone permanently, with no
+// buffering or replay. nextRound then stays null forever, and Result.jsx's
+// "Calculating results…" branch (nextRound == null / not game over) never
+// resolves.
 //
-// connect / disconnect / connect_error are Socket instance events → socket.on(...)
-// reconnect_attempt / reconnect / reconnect_error / reconnect_failed are
-// Manager-level events → must be read via socket.io.on(...), not socket.on(...).
-socket.on('connect', () => {
-  console.log('[socket] connect', socket.id, new Date().toISOString());
+// This previously worked by accident in development ONLY because the old
+// dev-only socket.onAny() below also wrote round:next straight to
+// sessionStorage — a handler that is always registered from module load,
+// regardless of which route is mounted, so it never lost the race. That
+// safety net was wrapped in `if (import.meta.env.DEV)` and therefore did not
+// exist in the production build, which is why this only reproduced in prod.
+//
+// Fix: register this caching side-effect unconditionally (not dev-gated) so
+// production has the same always-on safety net dev accidentally had. This is
+// intentionally separate from the dev-only verbose onAny() logger below.
+socket.onAny((event, ...args) => {
+  if (event === 'round:next') {
+    sessionStorage.setItem('nextRoundInfo', JSON.stringify(args[0]));
+  }
+  if (event === 'game:finished') {
+    sessionStorage.setItem('gameFinished', 'true');
+  }
 });
 
-socket.on('disconnect', (reason) => {
-  console.log('[socket] disconnect', reason, new Date().toISOString());
-});
-
-socket.on('connect_error', (err) => {
-  console.log('[socket] connect_error', err?.message || err, new Date().toISOString());
-});
-
-socket.io.on('reconnect_attempt', (attempt) => {
-  console.log('[socket] reconnect_attempt', attempt, new Date().toISOString());
-});
-
-socket.io.on('reconnect', (attempt) => {
-  console.log('[socket] reconnect', attempt, new Date().toISOString());
-});
-
-socket.io.on('reconnect_error', (err) => {
-  console.log('[socket] reconnect_error', err?.message || err, new Date().toISOString());
-});
-
-socket.io.on('reconnect_failed', () => {
-  console.log('[socket] reconnect_failed', new Date().toISOString());
-});
+// ── Connection lifecycle logging (always on — useful for future prod debugging) ──
+socket.on('connect',    () => console.log('[socket] connect', socket.id, new Date().toISOString()));
+socket.on('disconnect', (reason) => console.log('[socket] disconnect', reason, new Date().toISOString()));
+socket.on('connect_error', (err) => console.log('[socket] connect_error', err?.message || err, new Date().toISOString()));
+socket.io.on('reconnect_attempt', (attempt) => console.log('[socket] reconnect_attempt', attempt, new Date().toISOString()));
+socket.io.on('reconnect', (attempt) => console.log('[socket] reconnect', attempt, new Date().toISOString()));
 
 // ── Dev-only verbose logging ─────────────────────────────────────────────────
 if (import.meta.env.DEV) {
   socket.onAny((event, ...args) => {
     console.log(`[socket ←] ${event}`, args);
-
-    if (event === 'round:next') {
-      sessionStorage.setItem('nextRoundInfo', JSON.stringify(args[0]));
-    }
-    if (event === 'game:finished') {
-      sessionStorage.setItem('gameFinished', 'true');
-    }
   });
 
   socket.on('error', (err) => console.error('[socket] error', err));
 }
 
-window.socket = socket;
 export default socket;
